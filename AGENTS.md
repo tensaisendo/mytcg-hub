@@ -1,5 +1,7 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
+# Instructions du dépôt
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
+## Futur estimateur TCG
+
+Le projet d’estimateur Pokémon et One Piece est volontairement planifié pour
+plus tard. Sa spécification et les éléments déjà réutilisables sont décrits
+dans [docs/estimateur-tcg.md](docs/estimateur-tcg.md).

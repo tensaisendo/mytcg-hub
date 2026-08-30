@@ -6,12 +6,23 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "fetch:card-names": "node scripts/fetchOfficialCardNames.js",
+    "enrich:cards": "node scripts/enrichCardsFromOfficial.js",
+    "import:cards": "node scripts/importCardsToStrapi.js",
+    "import:cards-from-media": "node scripts/importCardsFromMedia.js",
+    "cleanup:english-printings": "node scripts/cleanupEnglishPrintings.js",
+    "test:cardtrader-price": "node scripts/cardTraderPricing.js --self-test",
+    "fetch:cardtrader-blueprints": "python scripts/fetchCardTraderBlueprints.py",
+    "map:cardtrader-blueprints": "python scripts/mapCardTraderBlueprints.py",
+    "sync:cardtrader-prices": "python scripts/syncCardTraderPrices.py"
   },
   "dependencies": {
+    "axios": "^1.18.0",
     "next": "16.2.9",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "slugify": "^1.6.9"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
