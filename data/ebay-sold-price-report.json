@@ -1,0 +1,65 @@
+{
+  "generatedAt": "2026-09-01T08:30:24.225Z",
+  "mode": "dry-run",
+  "language": "FR",
+  "records": [
+    {
+      "documentId": "a6bp89zxqihuujqp3d237e0o",
+      "cardId": "EB01-001_P1",
+      "name": "Oden Kozuki",
+      "language": "FR",
+      "currentPrice": null,
+      "searchUrl": "https://www.ebay.fr/sch/i.html?_nkw=EB01-001_P1+Oden+Kozuki+One+Piece+Card+Game+FR+francais&LH_Sold=1&LH_Complete=1",
+      "sampleSize": 0,
+      "proposedPrice": null,
+      "status": "insufficient-sold-listings"
+    },
+    {
+      "documentId": "lajrm4dn4bi7b806tygk0e7s",
+      "cardId": "EB01-003_P1",
+      "name": "Kidd et Killer",
+      "language": "FR",
+      "currentPrice": null,
+      "searchUrl": "https://www.ebay.fr/sch/i.html?_nkw=EB01-003_P1+Kidd+et+Killer+One+Piece+Card+Game+FR+francais&LH_Sold=1&LH_Complete=1",
+      "sampleSize": 0,
+      "proposedPrice": null,
+      "status": "insufficient-sold-listings"
+    },
+    {
+      "documentId": "xtj5w26jf36kg64gnaivadaw",
+      "cardId": "EB01-006_P1",
+      "name": "Tony-Tony Chopper",
+      "language": "FR",
+      "currentPrice": null,
+      "searchUrl": "https://www.ebay.fr/sch/i.html?_nkw=EB01-006_P1+Tony-Tony+Chopper+One+Piece+Card+Game+FR+francais&LH_Sold=1&LH_Complete=1",
+      "sampleSize": 0,
+      "proposedPrice": null,
+      "status": "insufficient-sold-listings"
+    },
+    {
+      "documentId": "h8kki3b3z9kaekv9il5d3370",
+      "cardId": "EB01-009_P1",
+      "name": "Arrête de discuter et viens avec nous !!",
+      "language": "FR",
+      "currentPrice": null,
+      "searchUrl": "https://www.ebay.fr/sch/i.html?_nkw=EB01-009_P1+Arr%C3%AAte+de+discuter+et+viens+avec+nous%C2%A0%21%21+One+Piece+Card+Game+FR+francais&LH_Sold=1&LH_Complete=1",
+      "sampleSize": 0,
+      "proposedPrice": null,
+      "status": "insufficient-sold-listings"
+    },
+    {
+      "documentId": "f69mqlnzt4yly6jwk6uramcw",
+      "cardId": "EB01-014_P1",
+      "name": "Sanji",
+      "language": "FR",
+      "currentPrice": null,
+      "searchUrl": "https://www.ebay.fr/sch/i.html?_nkw=EB01-014_P1+Sanji+One+Piece+Card+Game+FR+francais&LH_Sold=1&LH_Complete=1",
+      "sampleSize": 0,
+      "proposedPrice": null,
+      "status": "insufficient-sold-listings"
+    }
+  ],
+  "counts": {
+    "insufficient-sold-listings": 5
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "FR": {
+    "market": "France",
+    "checkedAt": "2026-09-09T17:48:51.653Z",
+    "pagesChecked": 8,
+    "matches": [
+      {
+        "url": "https://fr.onepiece-cardgame.com/news/restriction-260501.html",
+        "cardIds": [
+          "OP07-115",
+          "EB04-058"
+        ]
+      },
+      {
+        "url": "https://fr.onepiece-cardgame.com/events/2026/passport-campaign/",
+        "cardIds": [
+          "OP12-036",
+          "EB02-017",
+          "ST21-002",
+          "OP09-105",
+          "OP11-053",
+          "OP11-009",
+          "EB02-037",
+          "ST14-010",
+          "EB02-055"
+        ]
+      }
+    ]
+  },
+  "EN": {
+    "market": "NA/EU/OC/LATAM/ME",
+    "checkedAt": "2026-09-09T17:49:01.511Z",
+    "pagesChecked": 8,
+    "matches": [
+      {
+        "url": "https://en.onepiece-cardgame.com/events/regional-season2-26-27.html",
+        "cardIds": [
+          "OP15-108",
+          "OP15-109",
+          "OP15-119",
+          "EB04-061"
+        ]
+      },
+      {
+        "url": "https://en.onepiece-cardgame.com/news/restriction-260501.html",
+        "cardIds": [
+          "OP07-115",
+          "EB04-058"
+        ]
+      }
+    ]
+  },
+  "JP": {
+    "market": "Japan",
+    "checkedAt": "2026-09-09T17:49:11.165Z",
+    "pagesChecked": 8,
+    "matches": [
+      {
+        "url": "https://www.onepiece-cardgame.com/news/restriction-260501.html",
+        "cardIds": [
+          "OP07-115",
+          "EB04-058"
+        ]
+      },
+      {
+        "url": "https://www.onepiece-cardgame.com/events/release-event-op17.html",
+        "cardIds": [
+          "ST10-002",
+          "ST12-001",
+          "ST13-002",
+          "ST13-003",
+          "ST14-001",
+          "ST21-001",
+          "ST22-001",
+          "ST29-001",
+          "ST30-001",
+          "OP05-060",
+          "OP08-001",
+          "OP08-002",
+          "OP08-057",
+          "OP08-058",
+          "OP09-001",
+          "OP09-042",
+          "OP09-061",
+          "OP09-062",
+          "OP09-081",
+          "OP10-042",
+          "OP11-021",
+          "OP11-040",
+          "OP11-041",
+          "OP11-062",
+          "OP12-020",
+          "OP12-040",
+          "OP12-041",
+          "OP13-001",
+          "OP13-002",
+          "OP14-020",
+          "OP14-040",
+          "OP14-079",
+          "OP15-022",
+          "OP15-098",
+          "OP16-001",
+          "OP16-022",
+          "OP16-041",
+          "OP16-080",
+          "OP17-001",
+          "OP17-020",
+          "OP17-058",
+          "OP17-079",
+          "OP17-099",
+          "EB01-001",
+          "EB02-010",
+          "PRB01-001",
+          "OP13-046",
+          "OP13-071",
+          "OP13-087",
+          "OP14-026",
+          "OP14-107"
+        ]
+      }
+    ]
+  }
+}

@@ -2,7 +2,57 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Data migration
 
+Pour lancer CMS et Hub ensemble sous Windows, double-cliquer sur
+`../start-local.cmd`. Voir le [guide local](../README.md).
+
+### Sets by language
+
+L'import media reconnait les codes promo et les suffixes de reedition `_R1`.
+Utiliser `--only-missing` pour ignorer les fiches existantes, sans `--write`
+pour simuler. Une correspondance officielle exacte identifiant/produit/langue
+est exigee ; aucun repli sur une autre illustration ou sur un texte anglais.
+Voir `docs/MIGRATION_COMMANDS.md` pour les limites du rattrapage.
+
+Les distributions de tournoi (Championship, Winner Pack, Regional, Treasure
+Cup, etc.) sont distinctes des raretes et traitements. Elles sont maintenues
+par langue et region depuis les sites officiels Bandai. Voir la
+[procedure de maintenance](docs/MIGRATION_COMMANDS.md#distributions-officielles).
+
+Sets are now product editions identified by `code:language` (e.g. `ST16:FR`).
+`name` is the local product name without its code; `language` and `mediaFolderId`
+identify its Media Library folder. EN, FR and JP compositions are independent.
+Combined codes such as `OP14-EB04` are preserved. `labelFr`/`labelJp` are deprecated
+for Sets only. Old Sets have `isLegacy=true`; keep them until unresolved links are audited.
+Catalog filters use the actual localized Set relation, never the card-number prefix.
+See [the migration guide](docs/MIGRATION_COMMANDS.md#set-editions) for backup,
+dry-run and migration commands. Importing conflicting products with the same
+card filename is blocked rather than overwriting a collected/priced edition.
+
+### Personal collection
+
+`/collection?lang=JP` (also `FR` and `EN`) reuses the catalog view but does not
+download the complete catalog. After authentication, `/api/collection` proxies
+the private Strapi `/api/user-cards/catalog` endpoint. Filters and localized
+sorting apply to owned cards before pagination, with 12 cards per page.
+Owned variants remain separate. Image URLs are unchanged so browser caching
+can reuse images already viewed in the catalog. Private responses are not
+stored in a shared cache.
+
+Restart Strapi after installing the collection endpoint to register its route
+and authenticated-role permission. No migration or reimport is required.
+
 The WordPress to Strapi workflow and the CardTrader price commands are documented in [docs/MIGRATION_COMMANDS.md](docs/MIGRATION_COMMANDS.md).
+
+The legacy price sync is EN-only. FR/JP pricing uses
+`npm run sync:cardtrader-printing-price -- --language JP --card-id OP09-001 --blueprint-id 313141 --expansion-id 3848`
+as a read-only pilot; add `--write` to save a validated sample with enough offers.
+Missing FR/JP prices never fall back to the EN price. See the guide for matching
+restrictions and FR/EU offer thresholds.
+
+For all localized printings, run `npm run sync:cardtrader-localized-prices`
+to audit, then add `-- --write` to fill verified missing prices. The report is
+`data/cardtrader-localized-report.json`; ambiguous variants are not assigned a
+price automatically. Existing prices and EN cards are preserved.
 
 The deployment prerequisites are tracked in [docs/PREPRODUCTION.md](docs/PREPRODUCTION.md).
 

@@ -4,7 +4,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AuthDialog, type SessionUser } from "@/app/cards/CardsCatalog";
+import WantedProfileButton from "@/components/WantedProfileButton";
 import { getCardDisplay, getStrapiMediaUrl, type Card } from "@/lib/strapi";
+import GameIdentity from "@/components/GameIdentity";
 
 type DeckEntry = { card: Card; quantity: number; displayCode: string };
 type Restriction = {
@@ -193,6 +195,7 @@ export default function DeckBuilder({ cards }: { cards: Card[] }) {
       setCreatingDeck(false);
       return;
     }
+    if (typeof payload.meta?.berries === "number") setUser((current) => current ? { ...current, berries: payload.meta.berries } : current);
     setCreating(false); setLeaderChoice(null); await loadDecks(payload.data.documentId);
     setCreatingDeck(false);
   }
@@ -246,9 +249,10 @@ export default function DeckBuilder({ cards }: { cards: Card[] }) {
     <main className="deck-shell">
       <header className="site-header">
         <Link className="brand" href="/cards"><span className="brand__mark">M</span><span>MYTCG</span><strong>HUB</strong></Link>
+        <GameIdentity />
         <nav className="main-nav" aria-label="Navigation principale"><Link href="/cards">Cartes</Link><Link href="/sets">Extensions</Link><Link href="/collection">Collection</Link><Link href="/wishlist">Liste d’envies</Link><Link className="is-active" href="/decks">Decks</Link></nav>
-        <button className="rules-header-button" type="button" onClick={() => setRulesOpen(true)} disabled={!regulation}>Règles et restrictions</button>
-        <button className="profile-button" type="button" onClick={() => setAuthOpen(true)}>{user ? user.username.slice(0, 2).toUpperCase() : "OP"}</button>
+        <button className="rules-header-button" type="button" onClick={() => setRulesOpen(true)} disabled={!regulation}><Image src="/assets/one-piece/ico_rules_white.png" alt="" width={22} height={18} />Règles et restrictions</button>
+        <WantedProfileButton user={user} onClick={() => setAuthOpen(true)} />
       </header>
 
       <div className="deck-workspace">
@@ -283,7 +287,7 @@ export default function DeckBuilder({ cards }: { cards: Card[] }) {
             {liveIssues.length > 0 && <div className="deck-issues">{liveIssues.map((issue) => <p key={`${issue.type}-${issue.displayCodes.join("-")}`}>{issue.message}</p>)}</div>}
             <div className="deck-entries">{[...entries].sort((a, b) => (a.card.cost ?? 99) - (b.card.cost ?? 99)).map((entry) => <article className={liveIssues.some((issue) => issue.displayCodes.includes(entry.displayCode)) ? "is-restricted" : ""} key={entry.displayCode}>{cardImage(entry.card) && <Image src={cardImage(entry.card)} alt="" width={48} height={67} unoptimized />}<div><span>{entry.displayCode}</span><strong>{cardName(entry.card)}</strong></div><div><button type="button" onClick={() => changeQuantity(entry.displayCode, entry.quantity - 1)}>−</button><span>{entry.quantity}</span><button type="button" onClick={() => changeQuantity(entry.displayCode, entry.quantity + 1)} disabled={entry.quantity >= maxCopies(entry.displayCode) || total === 50}>+</button></div></article>)}</div>
           </section>
-        </> : <section className="deck-empty"><h1>Construis ton premier deck</h1><p>Choisis un Leader pour afficher toutes les cartes compatibles.</p><button type="button" onClick={openCreateDeck}>Nouveau deck</button></section>}
+        </> : <section className="deck-empty"><Image className="deck-empty__art" src="/assets/one-piece/card-backs.webp" alt="" width={1072} height={512} /><h1>Construis ton premier deck</h1><p>Choisis un Leader pour afficher toutes les cartes compatibles.</p><button type="button" onClick={openCreateDeck}>Nouveau deck</button></section>}
       </div>
 
       {creating && <div className="modal-backdrop"><form className="deck-modal" onSubmit={createDeck}><button className="modal-close" type="button" onClick={() => setCreating(false)}>×</button><h2>Nouveau deck</h2><label>Nom du deck<input name="name" required maxLength={80} /></label><span>Choisir un Leader</span><div className="leader-picker">{leaders.map((leader) => <button className={leaderChoice?.documentId === leader.documentId ? "is-active" : ""} type="button" key={leader.documentId} onClick={() => setLeaderChoice(leader)}>{cardImage(leader) && <Image src={cardImage(leader)} alt="" width={72} height={101} unoptimized />}<span>{cardName(leader)}</span></button>)}</div>{message && <p className="deck-message">{message}</p>}<button className="auth-submit" type="submit" disabled={creatingDeck || !leaderChoice}>{creatingDeck ? "Création..." : "Créer le deck"}</button></form></div>}

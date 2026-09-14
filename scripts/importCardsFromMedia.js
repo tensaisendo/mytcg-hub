@@ -2,12 +2,15 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const slugify = require("slugify");
+const { folderEdition } = require("../../mytcg-cms/scripts/set-edition.cjs");
+const { parseMediaIdentity, selectOfficial } = require("./cardMediaIdentity.cjs");
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://localhost:1337";
 const TOKEN = getStrapiToken();
 const CARD_LIST_URLS = {
   EN: "https://en.onepiece-cardgame.com/cardlist/",
   FR: "https://fr.onepiece-cardgame.com/cardlist/",
+  JP: "https://www.onepiece-cardgame.com/cardlist/",
 };
 
 const SERIES_CONFIG = {
@@ -41,11 +44,12 @@ const SERIES_CONFIG = {
   ST29: "ST-29 - EGGHEAD",
 };
 
-const treatmentNames = new Set(["Alternative Art", "Manga Rare", "SP"]);
+const treatmentNames = new Set(["Alternative Art", "Manga Rare", "Red Manga", "SP"]);
 const args = parseArgs(process.argv.slice(2));
 const DRY_RUN = !args.write;
 const LANGUAGE = normalizeLanguage(args.language || "EN");
 const missingRelations = new Map();
+const printingOperations = [];
 const requestedSeries = args.series?.length
   ? args.series.map(normalizeSeriesCode)
   : null;
@@ -63,6 +67,8 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error.config || {};
+    // A lost POST response may already have created the document. Never replay it.
+    if ((config.method || '').toLowerCase() === 'post') return Promise.reject(error);
     const retryable = [
       "ECONNRESET",
       "ETIMEDOUT",
@@ -111,6 +117,12 @@ function parseArgs(argv) {
 
     if (arg === "--write") {
       parsed.write = true;
+    } else if (arg === "--only-missing") {
+      parsed.onlyMissing = true;
+    } else if (arg === "--card-ids") {
+      parsed.cardIds = String(argv[++index] || '').toUpperCase().split(',').filter(Boolean);
+    } else if (arg === "--report") {
+      parsed.report = path.resolve(argv[++index]);
     } else if (arg === "--summary") {
       parsed.summary = true;
     } else if (arg === "--limit") {
@@ -274,7 +286,8 @@ function delay(ms) {
 }
 
 async function fetchSeries(series, language = "EN") {
-  const url = CARD_LIST_URLS[language] || CARD_LIST_URLS.EN;
+  const url = CARD_LIST_URLS[language];
+  if (!url) throw new Error(`No official source for ${language}`);
 
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     try {
@@ -387,7 +400,7 @@ function registerLabel(map, label, entry, type) {
   map.set(normalized, next);
 }
 
-async function fetchAll(endpoint, fields) {
+async function fetchAll(endpoint, fields, extraParams = {}) {
   const entries = [];
   let page = 1;
   let pageCount = 1;
@@ -396,6 +409,7 @@ async function fetchAll(endpoint, fields) {
     const params = {
       "pagination[page]": page,
       "pagination[pageSize]": 100,
+      ...extraParams,
     };
 
     fields.forEach((field, index) => {
@@ -416,7 +430,8 @@ async function loadRelationMaps() {
   const maps = { __entries: {} };
 
   for (const [type, config] of Object.entries(relationConfig)) {
-    const entries = await fetchAll(config.endpoint, config.fields || config.labels);
+    const loaded = await fetchAll(config.endpoint, type === "set" ? [...config.fields, "language", "mediaFolderId", "isLegacy"] : config.fields || config.labels);
+    const entries = type === "set" ? loaded.filter(entry => entry.language === LANGUAGE && !entry.isLegacy) : loaded;
     const map = new Map();
     const entriesById = new Map();
 
@@ -527,48 +542,25 @@ async function ensureRarity(name, relationMaps) {
 }
 
 function getMediaSet(file, foldersByPath, mediaRootPath) {
-  const folderName = foldersByPath.get(file.folderPath);
-  if (!folderName || file.folderPath === mediaRootPath) {
-    return { setName: null, setCode: null };
-  }
-
-  const setCode = normalizeSeriesCode(
-    folderName.match(/^(OP\d{2}|EB\d{2}|PRB\d{2}|ST-?\d{2})/)?.[1] || ""
-  );
-
-  return {
-    setName: folderName,
-    setCode: setCode || null,
-  };
+  if (!mediaRootPath || !file.folderPath?.startsWith(mediaRootPath + "/")) return {};
+  const productPath = file.folderPath.split("/").slice(0, mediaRootPath.split("/").length + 1).join("/");
+  const folder = foldersByPath.get(productPath);
+  if (!folder?.id) return {};
+  const edition = folderEdition(folder.name, LANGUAGE, folder.id);
+  return { setName: edition.name, setCode: edition.code, setKey: edition.key, mediaFolderId: edition.mediaFolderId };
 }
 
 function parseCardMedia(file, foldersByPath = new Map(), mediaRootPath = null) {
   const name = file.name || path.basename(file.url || "");
-  const ext = path.extname(name).toLowerCase();
-  if (![".png", ".jpg", ".jpeg", ".webp"].includes(ext)) return null;
-
-  const baseName = path.basename(name, ext);
-  const normalized = baseName.toUpperCase().replace(/[_ ]+/g, "-");
-  const match = normalized.match(
-    /^(OP\d{2}|EB\d{2}|PRB\d{2}|ST-?\d{2})-(\d{3})(?:-?(P\d+))?$/
-  );
-
-  if (!match) return null;
-
-  const series = normalizeSeriesCode(match[1]);
-  const displayCode = normalizeDisplayCode(`${match[1]}-${match[2]}`);
-  const variant = match[3] || null;
-  const cardId = variant ? `${displayCode}_${variant}` : displayCode;
+  const identity = parseMediaIdentity(name);
+  if (!identity) return null;
   const mediaSet = getMediaSet(file, foldersByPath, mediaRootPath);
 
   return {
     file,
     fileName: name,
-    series,
+    ...identity,
     ...mediaSet,
-    displayCode,
-    cardId,
-    variant,
   };
 }
 
@@ -661,11 +653,11 @@ function getLocalMediaFolders(rootPath) {
     const db = new Database(dbPath, { readonly: true });
     const folders = db
       .prepare(
-        "select name, path from upload_folders where path = ? or path like ? order by length(path) asc"
+        "select id, name, path from upload_folders where path = ? or path like ? order by length(path) asc"
       )
       .all(rootPath, `${rootPath}/%`);
     db.close();
-    return new Map(folders.map((folder) => [folder.path, folder.name]));
+    return new Map(folders.map((folder) => [folder.path, folder]));
   } catch (error) {
     console.log(`⚠️ LOCAL MEDIA FOLDER READ FAILED → ${error.message}`);
     return new Map();
@@ -684,7 +676,7 @@ async function getExistingCards() {
     "effect",
     "displayCode",
     "variant",
-  ]);
+  ], { "populate[treatment][fields][0]": "name", "populate[set][fields][0]": "key", "populate[set][fields][1]": "language" });
   return new Map(
     entries.map((entry) => [entry.cardId, entry]).filter(([cardId]) => Boolean(cardId))
   );
@@ -700,6 +692,10 @@ async function getExistingPrintings() {
       "pagination[page]": page,
       "pagination[pageSize]": 100,
       "populate[set][fields][0]": "name",
+      "populate[set][fields][1]": "key",
+      "populate[set][fields][2]": "language",
+      "populate[card][fields][0]": "cardId",
+      "populate[treatment][fields][0]": "name",
     };
 
     [
@@ -743,19 +739,30 @@ function getSetName(mediaCard, official) {
   return mediaCard.setName || mediaCard.series;
 }
 
+function validateSetAssignments(cards, existingCards, existingPrintings) {
+  const products = new Map();
+  for (const card of cards) {
+    if (!card.setKey) throw new Error(`Missing product folder for ${card.fileName}`);
+    const previous = products.get(card.cardId);
+    if (previous && previous !== card.setKey) throw new Error(`Multiple products for ${card.cardId}:${LANGUAGE}: ${previous}, ${card.setKey}. Import stopped to preserve existing editions.`);
+    products.set(card.cardId, card.setKey);
+    const existing = LANGUAGE === "EN" ? existingCards.get(card.cardId) : existingPrintings.get(`${card.cardId}:${LANGUAGE}`);
+    if (existing?.set?.key && existing.set.key !== card.setKey) throw new Error(`Set conflict for ${card.cardId}:${LANGUAGE}: ${existing.set.key} -> ${card.setKey}. Resolve this edition explicitly before importing.`);
+  }
+}
+
 async function ensureSet(mediaCard, relationMaps, official) {
-  const setName = getSetName(mediaCard, official);
-  const setCode = mediaCard.setCode || mediaCard.series;
+  const setName = mediaCard.setName;
+  const setCode = mediaCard.setCode;
+  if (!mediaCard.setKey || !mediaCard.mediaFolderId || !setName) throw new Error(`Missing product folder for ${mediaCard.fileName}; refusing to infer a set from the card code`);
   const existingId =
-    relationMaps.set.get(normalizeLabel(setName)) ||
-    relationMaps.set.get(normalizeLabel(setCode)) ||
-    relationMaps.set.get(normalizeLabel(mediaCard.series)) ||
+    relationMaps.set.get(normalizeLabel(mediaCard.setKey)) ||
     null;
 
   if (existingId || !setName) return existingId;
 
   recordMissingRelation("set", setName);
-  const key = slugify(setName, { lower: true, strict: true });
+  const key = mediaCard.setKey;
 
   if (DRY_RUN) {
     if (!args.summary) console.log(`🧪 WOULD CREATE SET → ${setName}`);
@@ -767,6 +774,8 @@ async function ensureSet(mediaCard, relationMaps, official) {
       name: setName,
       code: setCode,
       key,
+      language: LANGUAGE,
+      mediaFolderId: mediaCard.mediaFolderId,
     },
   });
   const set = response.data?.data;
@@ -781,22 +790,37 @@ async function ensureSet(mediaCard, relationMaps, official) {
 }
 
 function pickOfficialCard(mediaCard, officialCards) {
-  return (
-    officialCards.get(mediaCard.cardId) ||
-    officialCards.get(mediaCard.displayCode) ||
-    null
-  );
+  return selectOfficial(mediaCard, officialCards.get(mediaCard.cardId));
 }
 
 function getTreatment(mediaCard, official) {
-  if (mediaCard.variant) return "Alternative Art";
   if (official?.rarity === "SP") return "SP";
+  if (/^P\d+$/.test(mediaCard.variant || "")) return "Alternative Art";
   return null;
 }
 
 function getRarity(official) {
   if (!official?.rarity) return null;
   return treatmentNames.has(official.rarity) ? null : official.rarity;
+}
+
+function getDistributionMetadata(official) {
+  const distribution = String(official?.cardSet || "").trim();
+  if (!/(championship|\bcs\b|winner|treasure cup|tournament|regional|sealed battle|event pack)/i.test(distribution)) {
+    return { distribution: null, acquisition: null, event: null };
+  }
+  const acquisition = /finalist/i.test(distribution) ? "Finaliste"
+    : /winner|winner prize/i.test(distribution) ? "Vainqueur"
+    : /participation/i.test(distribution) ? "Participation"
+    : null;
+  const event = /treasure cup/i.test(distribution) ? "Treasure Cup"
+    : /regional/i.test(distribution) ? "Regional"
+    : /tournament/i.test(distribution) ? "Tournament"
+    : /sealed battle/i.test(distribution) ? "Sealed Battle"
+    : /championship|\bcs\b/i.test(distribution) ? "Championship"
+    : /event pack/i.test(distribution) ? "Event"
+    : null;
+  return { distribution, acquisition, event };
 }
 
 function getLocalizedField() {
@@ -840,6 +864,7 @@ function getLocalizedTreatmentLabel(treatment) {
   const labels = {
     "Alternative Art": "Illustration alternative",
     "Manga Rare": "Manga rare",
+    "Red Manga": "Red Manga",
     SP: "SP",
   };
 
@@ -855,6 +880,7 @@ function getLocalizedSetLabel(mediaCard, localizedOfficial) {
 }
 
 async function updateLocalizedRelationLabel(relationMaps, type, id, label) {
+  if (type === "set") return "skipped";
   const field = getLocalizedField();
   if (!field || !id || !label || label === "?") return "skipped";
 
@@ -1017,6 +1043,7 @@ async function buildPayload(mediaCard, official, relationMaps, setId, existingCa
       cardId: mediaCard.cardId,
       displayCode: mediaCard.displayCode,
       variant: mediaCard.variant,
+      ...getDistributionMetadata(official),
       slug: slugify(
         `${getSlugSource(name)}-${getSlugSource(mediaCard.cardId)}`,
         { lower: true, strict: true }
@@ -1053,7 +1080,7 @@ async function buildPayload(mediaCard, official, relationMaps, setId, existingCa
   if (treatmentId) {
     payload.data.treatment = { connect: { id: treatmentId } };
   }
-  if (setId) {
+  if (setId && LANGUAGE === "EN") {
     payload.data.set = { connect: { id: setId } };
   }
 
@@ -1073,6 +1100,7 @@ async function buildPayload(mediaCard, official, relationMaps, setId, existingCa
 }
 
 function getCardUpdateData(payload, existingCard) {
+  if (LANGUAGE !== "EN") return {};
   const next = payload.data;
   const update = {};
   const toIds = (value) => {
@@ -1088,13 +1116,15 @@ function getCardUpdateData(payload, existingCard) {
     "cardId",
     "displayCode",
     "variant",
+    "distribution",
+    "acquisition",
+    "event",
     "slug",
     "effect",
     "cost",
     "power",
     "life",
     "counter",
-    "price",
   ]) {
     const current = existingCard?.[field] ?? null;
     const incoming = next[field] ?? null;
@@ -1140,33 +1170,39 @@ function getCardUpdateData(payload, existingCard) {
   }
 
   const nextTreatmentId = next.treatment?.connect?.id || null;
-  const currentTreatmentId = existingCard?.treatment?.id || existingCard?.treatment?.data?.id || null;
-  if (nextTreatmentId && currentTreatmentId !== nextTreatmentId) {
+  // Undefined means the relation was not loaded; only an explicit empty
+  // relation may be filled. Never overwrite a treatment curated in Strapi.
+  const currentTreatment = existingCard?.treatment;
+  const treatmentIsEmpty = currentTreatment === null || currentTreatment?.data === null;
+  if (nextTreatmentId && treatmentIsEmpty) {
     update.treatment = { connect: { id: nextTreatmentId } };
   }
 
   const nextSetId = next.set?.connect?.id || null;
   const currentSetId = existingCard?.set?.id || existingCard?.set?.data?.id || null;
-  if (nextSetId && currentSetId !== nextSetId) {
+  if (LANGUAGE === "EN" && nextSetId && currentSetId !== nextSetId) {
     update.set = { connect: { id: nextSetId } };
   }
 
   return update;
 }
 
-function buildPrintingPayload(mediaCard, official, existingCard, setId) {
-  const name = official?.name || existingCard?.name || mediaCard.cardId;
+function buildPrintingPayload(mediaCard, official, existingCard, setId, relationMaps) {
+  if (!official?.name) throw new Error(`Missing ${LANGUAGE} official text for ${mediaCard.cardId}`);
+  const name = official.name;
   const effect =
     official?.effect && official.effect !== "-"
       ? official.effect
-      : existingCard?.effect || null;
+      : null;
 
+  const distribution = getDistributionMetadata(official);
   const payload = {
     data: {
       printingId: `${mediaCard.cardId}:${LANGUAGE}`,
       cardId: mediaCard.cardId,
       displayCode: mediaCard.displayCode,
       variant: mediaCard.variant,
+      ...distribution,
       language: LANGUAGE,
       name,
       effect,
@@ -1178,6 +1214,15 @@ function buildPrintingPayload(mediaCard, official, existingCard, setId) {
   if (setId) {
     payload.data.set = { connect: { id: setId } };
   }
+  if (existingCard?.id) {
+    payload.data.card = { connect: { id: existingCard.id } };
+  }
+  const treatmentId = relationMaps
+    ? getRelationId(relationMaps.treatment, "treatment", getTreatment(mediaCard, official))
+    : null;
+  if (treatmentId) {
+    payload.data.treatment = { connect: { id: treatmentId } };
+  }
 
   return payload;
 }
@@ -1186,7 +1231,7 @@ function getPrintingUpdateData(payload, existingPrinting) {
   const next = payload.data;
   const update = {};
 
-  for (const field of ["name", "effect", "language", "cardId", "displayCode", "variant"]) {
+  for (const field of ["name", "effect", "language", "cardId", "displayCode", "variant", "distribution", "acquisition", "event"]) {
     const current = existingPrinting?.[field] ?? null;
     const incoming = next[field] ?? null;
     if (current !== incoming) update[field] = incoming;
@@ -1198,17 +1243,27 @@ function getPrintingUpdateData(payload, existingPrinting) {
     update.set = { connect: { id: nextSetId } };
   }
 
+  const nextCardId = next.card?.connect?.id || null;
+  const currentCard = existingPrinting?.card;
+  const cardIsEmpty = currentCard === null || currentCard?.data === null;
+  if (nextCardId && cardIsEmpty) update.card = { connect: { id: nextCardId } };
+
+  const nextTreatmentId = next.treatment?.connect?.id || null;
+  const currentTreatment = existingPrinting?.treatment;
+  const treatmentIsEmpty = currentTreatment === null || currentTreatment?.data === null;
+  if (nextTreatmentId && treatmentIsEmpty) update.treatment = { connect: { id: nextTreatmentId } };
+
   return update;
 }
 
-async function createPrinting(mediaCard, official, existingCard, existingPrintings, setId) {
+async function createPrinting(mediaCard, official, existingCard, existingPrintings, setId, relationMaps) {
   if (LANGUAGE === "EN") {
     if (!args.summary) console.log(`⏭️ SKIPPED EN PRINTING → ${mediaCard.cardId}`);
     return "skipped";
   }
 
   const printingId = `${mediaCard.cardId}:${LANGUAGE}`;
-  const payload = buildPrintingPayload(mediaCard, official, existingCard, setId);
+  const payload = buildPrintingPayload(mediaCard, official, existingCard, setId, relationMaps);
   const existingPrinting = existingPrintings.get(printingId);
 
   if (existingPrinting) {
@@ -1252,10 +1307,12 @@ async function createPrinting(mediaCard, official, existingCard, existingPrintin
 
   if (DRY_RUN) {
     if (!args.summary) console.log("🧪 DRY RUN → SKIP PRINTING POST");
+    printingOperations.push({ action: 'planned', data: payload.data });
     return "would-create";
   }
 
   const response = await api.post("/card-printings", payload);
+  printingOperations.push({ action: 'created', documentId: response.data?.data?.documentId, data: payload.data });
   existingPrintings.set(printingId, response.data?.data);
   console.log(`✔ CREATED PRINTING → ${printingId}`);
   return "created";
@@ -1269,6 +1326,15 @@ async function main() {
   const relationMaps = await loadRelationMaps();
   const existingCards = await getExistingCards();
   const existingPrintings = await getExistingPrintings();
+  if (args.onlyMissing) {
+    // Draft-only documents also count as existing; never create a second identity.
+    for (const card of await fetchAll('/cards', ['cardId'], { status: 'draft' })) {
+      if (card.cardId && !existingCards.has(card.cardId)) existingCards.set(card.cardId, card);
+    }
+    for (const printing of await fetchAll('/card-printings', ['printingId'], { status: 'draft' })) {
+      if (printing.printingId && !existingPrintings.has(printing.printingId)) existingPrintings.set(printing.printingId, printing);
+    }
+  }
   const mediaFolder = args.mediaFolder || LANGUAGE;
   const mediaRootPath = getLocalMediaRootPath(mediaFolder);
 
@@ -1289,12 +1355,18 @@ async function main() {
   const mediaCards = allMediaCards
     .filter((card) => !requestedSeries || requestedSeries.includes(card.series))
     .sort((a, b) => a.cardId.localeCompare(b.cardId));
-  const cardsToImport = args.cardId
+  const selectedCards = args.cardIds
+    ? mediaCards.filter(card => args.cardIds.includes(card.cardId))
+    : args.cardId
     ? mediaCards.filter((card) => card.cardId.toUpperCase() === args.cardId)
     : Number.isInteger(args.limit) && args.limit > 0
       ? mediaCards.slice(0, args.limit)
       : mediaCards;
-  const seriesToFetch = [...new Set(cardsToImport.map((card) => card.series))];
+  const cardsToImport = args.onlyMissing
+    ? selectedCards.filter(card => LANGUAGE === "EN" ? !existingCards.has(card.cardId) : !existingPrintings.has(`${card.cardId}:${LANGUAGE}`))
+    : selectedCards;
+  validateSetAssignments(cardsToImport, existingCards, existingPrintings);
+  const seriesToFetch = [...new Set(cardsToImport.map((card) => card.series === 'P' ? card.displayCode : card.series))];
   const officialCards = new Map();
   const localizedOfficialCards = new Map();
 
@@ -1304,9 +1376,9 @@ async function main() {
   }
   console.log(`🚀 Cards selected = ${cardsToImport.length}`);
 
-  for (const series of seriesToFetch) {
+  for (const series of LANGUAGE === "EN" ? seriesToFetch : []) {
     for (const card of await fetchSeries(series, "EN")) {
-      officialCards.set(card.cardId, card);
+      officialCards.set(card.cardId, [...(officialCards.get(card.cardId) || []), card]);
     }
   }
 
@@ -1317,7 +1389,7 @@ async function main() {
   } else if (CARD_LIST_URLS[LANGUAGE]) {
     for (const series of seriesToFetch) {
       for (const card of await fetchSeries(series, LANGUAGE)) {
-        localizedOfficialCards.set(card.cardId, card);
+        localizedOfficialCards.set(card.cardId, [...(localizedOfficialCards.get(card.cardId) || []), card]);
       }
     }
   }
@@ -1334,11 +1406,17 @@ async function main() {
   let wouldUpdateLocalizedLabels = 0;
   const missingOfficial = [];
   const missingCanonical = [];
+  const plannedCards = [];
+  const createdCards = [];
 
   for (const mediaCard of cardsToImport) {
     const official = pickOfficialCard(mediaCard, officialCards);
-    const localizedOfficial =
-      pickOfficialCard(mediaCard, localizedOfficialCards) || official;
+    const localizedOfficial = pickOfficialCard(mediaCard, localizedOfficialCards);
+    if (!localizedOfficial) {
+      missingOfficial.push(`${mediaCard.cardId} (${LANGUAGE}: exact identifier/product not verified)`);
+      skipped += 1;
+      continue;
+    }
 
     if (!args.summary) {
       console.log("\n=========================");
@@ -1348,12 +1426,12 @@ async function main() {
     }
 
     const existingCard = existingCards.get(mediaCard.cardId);
-    const setId = official ? await ensureSet(mediaCard, relationMaps, official) : null;
+    const setId = await ensureSet(mediaCard, relationMaps, localizedOfficial);
 
     if (existingCard) {
       existingCardsCount += 1;
       if (!args.summary) console.log(`⏭️ CARD EXISTS → ${mediaCard.cardId}`);
-      if (official) {
+      if (official && LANGUAGE === "EN") {
         const labelResult = await syncLocalizedRelationLabels(
           relationMaps,
           mediaCard,
@@ -1400,7 +1478,8 @@ async function main() {
         localizedOfficial,
         existingCard,
         existingPrintings,
-        setId
+        setId,
+        relationMaps
       );
       if (result === "would-create") wouldCreatePrintings += 1;
       if (result === "would-update") wouldUpdatePrintings += 1;
@@ -1409,18 +1488,17 @@ async function main() {
       continue;
     }
 
-    if (!official) {
-      missingOfficial.push(mediaCard.cardId);
-      if (!args.summary) console.log(`⚠️ MISSING OFFICIAL DATA → ${mediaCard.cardId}`);
+    if (LANGUAGE !== "EN") {
+      missingCanonical.push(mediaCard.cardId);
+      if (!args.summary) console.log(`REVIEW REQUIRED: no shared card for ${mediaCard.cardId}:${LANGUAGE}`);
       skipped += 1;
       continue;
     }
-
-    if (LANGUAGE !== "EN") {
-      missingCanonical.push(mediaCard.cardId);
-      if (!args.summary) {
-        console.log(`➕ MISSING CANONICAL CARD, WILL CREATE → ${mediaCard.cardId}`);
-      }
+    if (!official) {
+      missingOfficial.push(mediaCard.cardId);
+      if (!args.summary) console.log(`REVIEW REQUIRED: no verified shared card for ${mediaCard.cardId}:${LANGUAGE}`);
+      skipped += 1;
+      continue;
     }
 
     const labelResult = await syncLocalizedRelationLabels(
@@ -1449,12 +1527,14 @@ async function main() {
 
     if (DRY_RUN) {
       wouldCreateCards += 1;
+      plannedCards.push({ cardId: mediaCard.cardId, imageId: mediaCard.file.id, setId, data: payload.data });
       const result = await createPrinting(
         mediaCard,
         localizedOfficial,
         payload.data,
         existingPrintings,
-        setId
+        setId,
+        relationMaps
       );
       if (result === "would-create") wouldCreatePrintings += 1;
       if (result === "would-update") wouldUpdatePrintings += 1;
@@ -1468,13 +1548,15 @@ async function main() {
     const createdCard = response.data?.data;
     existingCards.set(mediaCard.cardId, createdCard);
     created += 1;
+    createdCards.push({ cardId: mediaCard.cardId, documentId: createdCard?.documentId, imageId: mediaCard.file.id, setId });
     console.log(`✔ CREATED → ${mediaCard.cardId}`);
     const result = await createPrinting(
       mediaCard,
       localizedOfficial,
       createdCard,
       existingPrintings,
-      setId
+      setId,
+      relationMaps
     );
     if (result === "created") createdPrintings += 1;
     if (result === "updated") updatedPrintings += 1;
@@ -1495,9 +1577,13 @@ async function main() {
   console.log(`existing cards: ${existingCardsCount}`);
   console.log(`missing official data: ${missingOfficial.length}`);
   if (missingOfficial.length) console.log(missingOfficial.join("\n"));
-  console.log(`canonical cards created from localized media: ${missingCanonical.length}`);
+  console.log(`shared cards requiring review (not created): ${missingCanonical.length}`);
   if (missingCanonical.length) console.log(missingCanonical.join("\n"));
   console.log(`missing relations: ${missingRelations.size}`);
+  if (args.report) {
+    fs.mkdirSync(path.dirname(args.report), { recursive: true });
+    fs.writeFileSync(args.report, JSON.stringify({ dryRun: DRY_RUN, language: LANGUAGE, selected: cardsToImport.length, plannedCards, createdCards, printingOperations, missingOfficial, missingCanonical, missingRelations: [...missingRelations.values()] }, null, 2) + '\n');
+  }
   if (missingRelations.size) {
     for (const item of [...missingRelations.values()].sort((a, b) =>
       `${a.type}:${a.label}`.localeCompare(`${b.type}:${b.label}`)
@@ -1507,7 +1593,8 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+module.exports = { parseOfficialCards, parseCardMedia, fetchSeries, pickOfficialCard, getTreatment, getDistributionMetadata, buildPrintingPayload };
+if (require.main === module) main().catch((error) => {
   console.error("❌ importCardsFromMedia failed");
   console.error(error.response?.data || error.message);
   process.exit(1);

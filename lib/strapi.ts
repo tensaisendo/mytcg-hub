@@ -1,4 +1,8 @@
+import { distributionsForLanguage, distributionCardIds } from "@/lib/card-distributions";
+
 export type CardRelation = {
+  language?: CardLanguage | null;
+  isLegacy?: boolean;
   id: number;
   name: string;
   code?: string | null;
@@ -19,6 +23,32 @@ export type CardImage = {
 
 export type CardLanguage = "FR" | "EN" | "JP";
 
+export type ExtensionSummary = {
+  language?: CardLanguage;
+  name: string;
+  labelFr?: string | null;
+  labelJp?: string | null;
+  code: string;
+  image?: CardImage | null;
+  count: number;
+  printingIds: string[];
+};
+
+export function getTreatmentLabel(treatment: CardRelation | null | undefined) {
+  const name = treatment?.name?.trim() || "";
+  return name === "Manga Rare" ? "Manga" : name;
+}
+
+function distributionFromProduct(name: string | null | undefined) {
+  const distribution = name?.trim() || "";
+  if (!/(championship|\bcs\b|winner|treasure cup|tournament|regional|sealed battle|event pack)/i.test(distribution)) return null;
+  return {
+    distribution,
+    acquisition: /finalist/i.test(distribution) ? "Finaliste" : /winner/i.test(distribution) ? "Vainqueur" : /participation/i.test(distribution) ? "Participation" : null,
+    event: /treasure cup/i.test(distribution) ? "Treasure Cup" : /regional/i.test(distribution) ? "Regional" : /tournament/i.test(distribution) ? "Tournament" : /sealed battle/i.test(distribution) ? "Sealed Battle" : /championship|\bcs\b/i.test(distribution) ? "Championship" : "Event",
+  };
+}
+
 export type CardPrinting = {
   id: number;
   documentId: string;
@@ -27,15 +57,23 @@ export type CardPrinting = {
   cardId: string;
   displayCode: string | null;
   variant: string | null;
+  distribution: string | null;
+  acquisition: string | null;
+  event: string | null;
+  distributionRegion: string | null;
+  distributionSourceUrl: string | null;
+  distributionVerifiedAt: string | null;
   language: CardLanguage;
   name: string;
   effect: string | null;
   price: number | null;
   priceCurrency: "EUR" | null;
-  priceSource: "CardTrader" | null;
+  priceSource: "CardTrader" | "Cardmarket" | "eBay" | null;
   priceScope: "FR" | "EU" | null;
   image: CardImage | null;
   set: CardRelation | null;
+  card: { id: number; documentId: string; cardId: string } | null;
+  treatment: CardRelation | null;
 };
 
 export type Card = {
@@ -46,9 +84,15 @@ export type Card = {
   cardId: string;
   displayCode: string | null;
   variant: string | null;
+  distribution: string | null;
+  acquisition: string | null;
+  event: string | null;
+  distributionRegion: string | null;
+  distributionSourceUrl: string | null;
+  distributionVerifiedAt: string | null;
   price: number | null;
   priceCurrency: "EUR" | null;
-  priceSource: "CardTrader" | null;
+  priceSource: "CardTrader" | "Cardmarket" | "eBay" | null;
   priceScope: "FR" | "EU" | null;
   cost: number | null;
   power: number | null;
@@ -75,6 +119,14 @@ const FETCH_RETRY_ERRORS = new Set([
   "EPROTO",
 ]);
 
+export async function fetchExtensionSummaries(language: CardLanguage): Promise<ExtensionSummary[]> {
+  const response = await fetchWithRetry(`${STRAPI_URL}/api/sets/summary?language=${language}`, {
+    cache: "no-store",
+  }, "Strapi extension summaries");
+  const payload = await response.json() as { data: ExtensionSummary[] };
+  return payload.data;
+}
+
 async function fetchWithRetry(url: string, init: RequestInit, label: string, attempts = 4) {
   let lastError: unknown;
 
@@ -99,6 +151,7 @@ async function fetchWithRetry(url: string, init: RequestInit, label: string, att
 
 export type CatalogFilters = {
   treatment?: string;
+  distribution?: string;
   query?: string;
   setCode?: string;
   rarity?: string;
@@ -109,13 +162,14 @@ export type CatalogFilters = {
 
 export type CatalogOptions = {
   treatments: CardRelation[];
+  distributions: string[];
   sets: CardRelation[];
   rarities: CardRelation[];
   colors: CardRelation[];
   types: CardRelation[];
 };
 
-function cardsQuery(page: number, filters: CatalogFilters = {}) {
+function cardsQuery(page: number, filters: CatalogFilters = {}, language: CardLanguage = "EN") {
   const params = new URLSearchParams({
     "pagination[page]": String(page),
     // The catalogue displays one representative per displayCode. Fetch a
@@ -125,6 +179,10 @@ function cardsQuery(page: number, filters: CatalogFilters = {}) {
     "sort[0]": filters.sort === "name" ? "name:asc" : filters.sort === "price-asc" ? "price:asc" : filters.sort === "price-desc" ? "price:desc" : "cardId:asc",
   });
 
+  if (filters.sort === "price-asc" || filters.sort === "price-desc") {
+    params.set("filters[price][$notNull]", "true");
+  }
+
   if (filters.query) {
     params.set("filters[$or][0][name][$containsi]", filters.query);
     params.set("filters[$or][1][cardId][$containsi]", filters.query);
@@ -133,10 +191,11 @@ function cardsQuery(page: number, filters: CatalogFilters = {}) {
   if (filters.setCode) params.set("filters[set][code][$eq]", filters.setCode);
   if (filters.rarity) params.set("filters[rarity][name][$eq]", filters.rarity);
   if (filters.treatment) params.set("filters[treatment][name][$eq]", filters.treatment);
+  if (filters.distribution) distributionCardIds(filters.distribution, language).forEach((cardId, index) => params.set(`filters[cardId][$in][${index}]`, cardId));
   if (filters.color) params.set("filters[colors][name][$eq]", filters.color);
   if (filters.type) params.set("filters[types][name][$eq]", filters.type);
 
-  ["name", "slug", "cardId", "displayCode", "variant", "price", "cost", "power", "life", "counter"].forEach(
+  ["name", "slug", "cardId", "displayCode", "variant", "distribution", "acquisition", "event", "distributionRegion", "distributionSourceUrl", "distributionVerifiedAt", "price", "cost", "power", "life", "counter"].forEach(
     (field, index) => params.set(`fields[${index}]`, field),
   );
   params.set("populate[image][fields][0]", "url");
@@ -145,6 +204,7 @@ function cardsQuery(page: number, filters: CatalogFilters = {}) {
   params.set("populate[set][fields][1]", "code");
   params.set("populate[set][fields][2]", "labelFr");
   params.set("populate[set][fields][3]", "labelJp");
+  params.set("populate[set][fields][4]", "language");
   params.set("populate[rarity][fields][0]", "name");
   params.set("populate[rarity][fields][1]", "labelFr");
   params.set("populate[rarity][fields][2]", "labelJp");
@@ -157,6 +217,12 @@ function cardsQuery(page: number, filters: CatalogFilters = {}) {
   params.set("populate[types][fields][0]", "name");
   params.set("populate[types][fields][1]", "labelFr");
   params.set("populate[types][fields][2]", "labelJp");
+  params.set("populate[attributes][fields][0]", "name");
+  params.set("populate[attributes][fields][1]", "labelFr");
+  params.set("populate[attributes][fields][2]", "labelJp");
+  params.set("populate[features][fields][0]", "name");
+  params.set("populate[features][fields][1]", "labelFr");
+  params.set("populate[features][fields][2]", "labelJp");
   return params.toString();
 }
 
@@ -197,6 +263,12 @@ function printingsQuery(page: number, cardIds?: string[], language?: CardLanguag
     "cardId",
     "displayCode",
     "variant",
+    "distribution",
+    "acquisition",
+    "event",
+    "distributionRegion",
+    "distributionSourceUrl",
+    "distributionVerifiedAt",
     "language",
     "name",
     "effect",
@@ -209,9 +281,16 @@ function printingsQuery(page: number, cardIds?: string[], language?: CardLanguag
   params.set("populate[image][fields][0]", "url");
   params.set("populate[image][fields][1]", "alternativeText");
   if (language) params.set("filters[language][$eq]", language);
+  params.set("populate[set][fields][0]", "name");
+  params.set("populate[set][fields][1]", "code");
+  params.set("populate[set][fields][2]", "language");
+  params.set("populate[card][fields][0]", "cardId");
+  params.set("populate[treatment][fields][0]", "name");
+  params.set("populate[treatment][fields][1]", "labelFr");
+  params.set("populate[treatment][fields][2]", "labelJp");
 
   cardIds?.forEach((cardId, index) => {
-    params.set(`filters[cardId][$in][${index}]`, cardId);
+    params.set(`filters[card][cardId][$in][${index}]`, cardId);
   });
 
   return params.toString();
@@ -222,20 +301,74 @@ type CardsResponse = {
   meta: { pagination: { pageCount: number; total: number } };
 };
 
-async function fetchCardsPage(page: number, filters: CatalogFilters = {}): Promise<CardsResponse> {
-  const response = await fetchWithRetry(`${STRAPI_URL}/api/cards?${cardsQuery(page, filters)}`, {
+async function fetchCardsPage(page: number, filters: CatalogFilters = {}, englishOnly = false): Promise<CardsResponse> {
+  const params = new URLSearchParams(cardsQuery(page, filters, englishOnly ? "EN" : undefined));
+  if (englishOnly) params.set("filters[set][language][$eq]", "EN");
+  const response = await fetchWithRetry(`${STRAPI_URL}/api/cards?${params}`, {
     next: { revalidate: 300 },
   }, "Strapi cards");
   return response.json();
 }
 
+async function fetchLocalizedPriceCatalogPage(page: number, language: CardLanguage, filters: CatalogFilters): Promise<CardsResponse> {
+  const printingParams = new URLSearchParams(printingsQuery(page, undefined, language));
+  printingParams.set("pagination[pageSize]", "24");
+  printingParams.set("sort[0]", filters.sort === "price-asc" ? "price:asc" : filters.sort === "price-desc" ? "price:desc" : filters.sort === "name" ? "name:asc" : "cardId:asc");
+  printingParams.set("filters[set][language][$eq]", language);
+  if (filters.sort === "price-asc" || filters.sort === "price-desc") printingParams.set("filters[price][$notNull]", "true");
+  if (filters.query) {
+    printingParams.set("filters[$or][0][name][$containsi]", filters.query);
+    printingParams.set("filters[$or][1][cardId][$containsi]", filters.query);
+  }
+  if (filters.setCode) printingParams.set("filters[set][code][$eq]", filters.setCode);
+  if (filters.treatment) printingParams.set("filters[treatment][name][$eq]", filters.treatment);
+  if (filters.distribution) {
+    const knownCardIds = distributionCardIds(filters.distribution, language);
+    if (knownCardIds.length) knownCardIds.forEach((cardId, index) => printingParams.set(`filters[cardId][$in][${index}]`, cardId));
+    else printingParams.set("filters[distribution][$eq]", filters.distribution);
+  }
+  const printingResponse = await fetchWithRetry(`${STRAPI_URL}/api/card-printings?${printingParams}`, {
+    next: { revalidate: 300 },
+  }, "Strapi localized price printings");
+  const printingPayload = await printingResponse.json() as { data: CardPrinting[]; meta: CardsResponse["meta"] };
+  if (!printingPayload.data.length) return { data: [], meta: printingPayload.meta };
+
+  const cardIds = [...new Set(printingPayload.data.map((printing) => printing.card?.cardId || printing.cardId))];
+  const cardParams = new URLSearchParams(cardsQuery(1, { ...filters, query: undefined, setCode: undefined, treatment: undefined, distribution: undefined, sort: "code" }));
+  cardParams.set("pagination[pageSize]", "100");
+  cardParams.delete("sort[0]");
+  cardIds.forEach((cardId, index) => cardParams.set(`filters[cardId][$in][${index}]`, cardId));
+  const cardResponse = await fetchWithRetry(`${STRAPI_URL}/api/cards?${cardParams}`, {
+    next: { revalidate: 300 },
+  }, "Strapi localized price cards");
+  const cards = (await cardResponse.json() as CardsResponse).data;
+  const order = new Map(cardIds.map((cardId, index) => [cardId, index]));
+  return {
+    data: attachPrintings(cards, printingPayload.data).sort((a, b) => (order.get(a.cardId) ?? 0) - (order.get(b.cardId) ?? 0)),
+    meta: printingPayload.meta,
+  };
+}
+
 export async function fetchCatalogPage(page: number, language: CardLanguage = "EN", filters: CatalogFilters = {}) {
-  let result = await fetchCardsPage(page, filters);
+  if (language !== "EN") {
+    let localized = await fetchLocalizedPriceCatalogPage(page, language, filters);
+    const cards = [...localized.data];
+    let loadedPage = page;
+    while (loadedPage < localized.meta.pagination.pageCount && new Set(cards.map(card => card.displayCode || card.cardId.split("_")[0])).size < 12) {
+      localized = await fetchLocalizedPriceCatalogPage(++loadedPage, language, filters);
+      cards.push(...localized.data);
+    }
+    return {
+      cards,
+      page: loadedPage,
+      pageCount: localized.meta.pagination.pageCount,
+      total: localized.meta.pagination.total,
+    };
+  }
+  const result = await fetchCardsPage(page, filters, true);
   let cards = [...result.data];
   let loadedPage = page;
-  let printings = language !== "EN"
-    ? await fetchPrintings(result.data.map((card) => card.cardId), language)
-    : [];
+  let printings = await fetchPrintings(result.data.map((card) => card.cardId), language);
 
   // Card pages may contain variants or too few matches for a filter. Continue
   // until the first catalogue window contains 12 representative displayCodes.
@@ -246,7 +379,7 @@ export async function fetchCatalogPage(page: number, language: CardLanguage = "E
     const localizedCodes = new Set(candidateCards.map((card) => card.displayCode || card.cardId.split("_")[0]));
     if (localizedCodes.size >= 12) break;
     loadedPage += 1;
-    const nextPage = await fetchCardsPage(loadedPage, filters);
+    const nextPage = await fetchCardsPage(loadedPage, filters, true);
     cards = [...cards, ...nextPage.data];
     printings = [...printings, ...await fetchPrintings(nextPage.data.map((card) => card.cardId), language)];
   }
@@ -271,44 +404,27 @@ export async function fetchCatalogOptions(language: CardLanguage = "EN"): Promis
   };
   // Keep these small requests sequential: Strapi can reset connections when
   // several collection queries start together during local development.
-  const sets = await fetchRelationCollection("sets");
+  const localizedSets: CardRelation[] = [];
+  for (let page = 1; ; page++) {
+    const params = new URLSearchParams(relationOptionsQuery(page));
+    params.set("filters[language][$eq]", language);
+    params.set("filters[isLegacy][$eq]", "false");
+    const response = await fetchWithRetry(`${STRAPI_URL}/api/sets?${params}`, { cache: "no-store" }, "Strapi localized sets");
+    const payload = await response.json() as { data: CardRelation[]; meta: { pagination: { pageCount: number } } };
+    localizedSets.push(...payload.data);
+    if (page >= payload.meta.pagination.pageCount) break;
+  }
   const rarities = await fetchRelationCollection("rarities");
   const colors = await fetchRelationCollection("colors");
   const types = await fetchRelationCollection("types");
   const treatments = await fetchRelationCollection("treatments");
-  const firstSetQuery = languageSetsQuery(1, language);
-  const firstSetPage = await fetchWithRetry(`${STRAPI_URL}/api/${firstSetQuery.endpoint}?${firstSetQuery.query}`, { next: { revalidate: 3600 } }, "Strapi language sets").then((response) => response.json() as Promise<{ data: Array<{ cardId: string }>; meta: { pagination: { pageCount: number } } }>);
-  const languageSetPages: Array<{ data: Array<{ cardId: string }> }> = [firstSetPage];
-  for (let page = 2; page <= firstSetPage.meta.pagination.pageCount; page += 1) {
-    const setQuery = languageSetsQuery(page, language);
-    languageSetPages.push(await fetchWithRetry(`${STRAPI_URL}/api/${setQuery.endpoint}?${setQuery.query}`, { next: { revalidate: 3600 } }, "Strapi language sets").then((response) => response.json() as Promise<{ data: Array<{ cardId: string }> }>));
-  }
   const uniqueRelations = (relations: CardRelation[]) => [...new Map(
     relations.filter((relation) => relation?.name).map((relation) => [
       relation.code ? relation.code.replace(/-/g, "").toUpperCase() : relation.name.trim().toLocaleLowerCase(),
       relation,
     ]),
   ).values()].sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name, undefined, { numeric: true }));
-  const cardSetCode = (cardId: string) => {
-    const match = cardId.match(/^((?:OP|EB|ST|PRB)-?\d+)/i);
-    return match?.[1].replace(/-/g, "").replace(/_/g, "").toUpperCase() || "";
-  };
-  const availableCodes = new Set(languageSetPages.flatMap((page) => page.data.map((item) => cardSetCode(item.cardId))));
-  let allowedCodes = availableCodes;
-  if (language === "FR") {
-    // FR uses the shared EN/FR catalogue and excludes sets available only in JP.
-    const enQuery = languageSetsQuery(1, "EN");
-    const enPage = await fetchWithRetry(`${STRAPI_URL}/api/${enQuery.endpoint}?${enQuery.query}`, { next: { revalidate: 3600 } }, "Strapi EN language sets").then((response) => response.json() as Promise<{ data: Array<{ cardId: string }>; meta: { pagination: { pageCount: number } } }>);
-    const enItems = [...enPage.data];
-    for (let page = 2; page <= enPage.meta.pagination.pageCount; page += 1) {
-      const pageQuery = languageSetsQuery(page, "EN");
-      const nextEnPage = await fetchWithRetry(`${STRAPI_URL}/api/${pageQuery.endpoint}?${pageQuery.query}`, { next: { revalidate: 3600 } }, "Strapi EN language sets").then((response) => response.json() as Promise<{ data: Array<{ cardId: string }> }>);
-      enItems.push(...nextEnPage.data);
-    }
-    const enCodes = new Set(enItems.map((item) => cardSetCode(item.cardId)));
-    allowedCodes = new Set([...availableCodes].filter((code) => enCodes.has(code)));
-  }
-  const languageSets = uniqueRelations(sets.filter((set) => set.code && allowedCodes.has(set.code.replace(/-/g, "").toUpperCase())));
+  const languageSets = uniqueRelations(localizedSets);
   return {
     // Never fall back to the global list: that would mix extensions from
     // other languages into the active language filter.
@@ -316,7 +432,10 @@ export async function fetchCatalogOptions(language: CardLanguage = "EN"): Promis
     rarities: uniqueRelations(rarities),
     colors: uniqueRelations(colors),
     types: uniqueRelations(types),
-    treatments: uniqueRelations(treatments),
+    treatments: uniqueRelations(treatments.some((item) => item.name === "Red Manga")
+      ? treatments
+      : [...treatments, { id: -1, name: "Red Manga" }]),
+    distributions: [...new Set(Object.values(distributionsForLanguage(language)))].sort(),
   };
 }
 
@@ -343,7 +462,8 @@ function attachPrintings(cards: Card[], printings: CardPrinting[]) {
   const byCardId = new Map<string, CardPrinting[]>();
 
   for (const printing of printings) {
-    byCardId.set(printing.cardId, [...(byCardId.get(printing.cardId) || []), printing]);
+    const canonicalCardId = printing.card?.cardId || printing.cardId;
+    byCardId.set(canonicalCardId, [...(byCardId.get(canonicalCardId) || []), printing]);
   }
 
   return cards.map((card) => ({
@@ -396,6 +516,12 @@ export async function fetchCardBySlug(slug: string): Promise<Card | null> {
   params.set("populate[types][fields][0]", "name");
   params.set("populate[types][fields][1]", "labelFr");
   params.set("populate[types][fields][2]", "labelJp");
+  params.set("populate[attributes][fields][0]", "name");
+  params.set("populate[attributes][fields][1]", "labelFr");
+  params.set("populate[attributes][fields][2]", "labelJp");
+  params.set("populate[features][fields][0]", "name");
+  params.set("populate[features][fields][1]", "labelFr");
+  params.set("populate[features][fields][2]", "labelJp");
   const response = await fetch(`${STRAPI_URL}/api/cards?${params}`, {
     next: { revalidate: 300 },
   });
@@ -417,11 +543,13 @@ async function fetchPrintingBySlug(slug: string): Promise<CardPrinting | null> {
     "filters[slug][$eq]": slug,
     "pagination[pageSize]": "1",
   });
-  ["printingId", "slug", "cardId", "displayCode", "variant", "language", "name", "effect", "price", "priceCurrency", "priceSource", "priceScope"].forEach(
+  ["printingId", "slug", "cardId", "displayCode", "variant", "distribution", "acquisition", "event", "distributionRegion", "distributionSourceUrl", "distributionVerifiedAt", "language", "name", "effect", "price", "priceCurrency", "priceSource", "priceScope"].forEach(
     (field, index) => params.set(`fields[${index}]`, field),
   );
   params.set("populate[image][fields][0]", "url");
   params.set("populate[image][fields][1]", "alternativeText");
+  params.set("populate[card][fields][0]", "cardId");
+  params.set("populate[treatment][fields][0]", "name");
   const response = await fetch(`${STRAPI_URL}/api/card-printings?${params}`, {
     next: { revalidate: 300 },
   });
@@ -436,7 +564,7 @@ export async function fetchCardBySlugOrPrintingSlug(slug: string): Promise<Card 
   const printing = await fetchPrintingBySlug(slug);
   if (!printing) return null;
   const cards = await fetchCards();
-  return cards.find((item) => item.cardId === printing.cardId) || null;
+  return cards.find((item) => item.cardId === (printing.card?.cardId || printing.cardId)) || null;
 }
 
 export function getStrapiMediaUrl(path?: string | null) {
@@ -472,17 +600,30 @@ export function getPreferredPrinting(card: Card, language: CardLanguage = "FR") 
 export function getCardDisplay(card: Card, language: CardLanguage = "FR") {
   const printing = getPreferredPrinting(card, language);
   const useBaseCard = language === "EN";
+  const set = useBaseCard ? card.set : printing?.set || null;
+  const languageDistributions = distributionsForLanguage(language);
+  const inferredDistribution = distributionFromProduct(languageDistributions[useBaseCard ? card.cardId : printing?.cardId || card.cardId] || set?.name);
 
   return {
     printing,
+    cardId: useBaseCard ? card.cardId : printing?.cardId || card.cardId,
+    displayCode: useBaseCard ? card.displayCode : printing?.displayCode || card.displayCode,
+    variant: useBaseCard ? card.variant : printing?.variant ?? card.variant,
     name: useBaseCard ? card.name : printing?.name || card.name,
     effect: useBaseCard ? card.effect : printing?.effect || card.effect,
     image: useBaseCard ? card.image : printing?.image || card.image,
-    price: useBaseCard ? card.price : printing?.price ?? card.price,
-    priceCurrency: useBaseCard ? card.priceCurrency : printing?.priceCurrency || card.priceCurrency,
-    priceSource: useBaseCard ? card.priceSource : printing?.priceSource || card.priceSource,
-    priceScope: useBaseCard ? card.priceScope : printing?.priceScope || card.priceScope,
-    set: useBaseCard ? card.set : printing?.set || card.set,
+    price: useBaseCard ? card.price ?? null : printing?.price ?? null,
+    priceCurrency: useBaseCard ? card.priceCurrency : printing?.priceCurrency ?? null,
+    priceSource: useBaseCard ? card.priceSource : printing?.priceSource ?? null,
+    priceScope: useBaseCard ? card.priceScope : printing?.priceScope ?? null,
+    set,
+    treatment: useBaseCard ? card.treatment : printing?.treatment || null,
+    distribution: (useBaseCard ? card.distribution : printing?.distribution) || inferredDistribution?.distribution || null,
+    acquisition: (useBaseCard ? card.acquisition : printing?.acquisition) || inferredDistribution?.acquisition || null,
+    event: (useBaseCard ? card.event : printing?.event) || inferredDistribution?.event || null,
+    distributionRegion: (useBaseCard ? card.distributionRegion : printing?.distributionRegion) || null,
+    distributionSourceUrl: (useBaseCard ? card.distributionSourceUrl : printing?.distributionSourceUrl) || null,
+    distributionVerifiedAt: (useBaseCard ? card.distributionVerifiedAt : printing?.distributionVerifiedAt) || null,
     language: useBaseCard ? "EN" : printing?.language || null,
   };
 }
@@ -492,6 +633,7 @@ export function getRelationLabel(
   language: CardLanguage = "FR",
 ) {
   if (!relation) return "";
+  if (relation.language) return relation.language === language ? relation.name : "";
   if (language === "FR") {
     if (relation.labelFr) return relation.labelFr;
     if (/[\u3040-\u30ff\u3400-\u9fff]/.test(relation.name)) return relation.code || relation.name;

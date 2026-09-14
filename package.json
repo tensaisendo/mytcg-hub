@@ -11,11 +11,18 @@
     "enrich:cards": "node scripts/enrichCardsFromOfficial.js",
     "import:cards": "node scripts/importCardsToStrapi.js",
     "import:cards-from-media": "node scripts/importCardsFromMedia.js",
+    "backfill:printing-distribution": "node scripts/backfillPrintingDistribution.js",
+    "audit:official-distributions": "node scripts/auditOfficialDistributions.js",
+    "recover:english-batch": "node scripts/recoverEnglishBatch.cjs",
+    "recover:localized-batch": "node scripts/recoverLocalizedBatch.cjs",
     "cleanup:english-printings": "node scripts/cleanupEnglishPrintings.js",
     "test:cardtrader-price": "node scripts/cardTraderPricing.js --self-test",
     "fetch:cardtrader-blueprints": "python scripts/fetchCardTraderBlueprints.py",
     "map:cardtrader-blueprints": "python scripts/mapCardTraderBlueprints.py",
-    "sync:cardtrader-prices": "python scripts/syncCardTraderPrices.py"
+    "sync:cardtrader-prices": "python scripts/syncCardTraderPrices.py",
+    "sync:cardtrader-printing-price": "node scripts/syncCardTraderPrintingPrice.js",
+    "sync:cardtrader-localized-prices": "node scripts/syncCardTraderLocalizedPrices.js",
+    "sync:ebay-sold-prices": "node scripts/syncEbaySoldPrices.js"
   },
   "dependencies": {
     "axios": "^1.18.0",

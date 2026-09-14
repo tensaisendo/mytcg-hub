@@ -15,7 +15,7 @@ const setNames = {
   OP04: "OP04 - Kingdom of Intrigue",
   OP05: "OP05 - Awakening of the New Era",
 };
-const treatmentNames = new Set(["Alternative Art", "Manga Rare", "SP"]);
+const treatmentNames = new Set(["Alternative Art", "Manga Rare", "Red Manga", "SP"]);
 
 function decodeHtml(value = "") {
   const namedEntities = {

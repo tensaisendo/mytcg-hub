@@ -4,8 +4,11 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 import { AuthDialog, type SessionUser } from "@/app/cards/CardsCatalog";
-import { getCardDisplay, getRelationLabel, getStrapiMediaUrl, type Card, type CardLanguage } from "@/lib/strapi";
+import WantedProfileButton from "@/components/WantedProfileButton";
+import GameIdentity from "@/components/GameIdentity";
+import { getCardDisplay, getRelationLabel, getTreatmentLabel, getStrapiMediaUrl, type Card, type CardLanguage } from "@/lib/strapi";
 
 function subscribeWishlist(callback: () => void) {
   window.addEventListener("storage", callback);
@@ -87,7 +90,9 @@ export default function CardDetail({ card, variants, initialLanguage = "EN" }: {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ data: { ownedQuantity: nextOwned, wantedQuantity: nextWanted } }),
     });
-    if (!response.ok) { setOwned(previous.owned); setWanted(previous.wanted); setAuthOpen(true); }
+    if (!response.ok) { setOwned(previous.owned); setWanted(previous.wanted); setAuthOpen(true); return; }
+    const payload = await response.json();
+    if (typeof payload.meta?.berries === "number") setUser((current) => current ? { ...current, berries: payload.meta.berries } : current);
   }
 
   function toggleWanted() {
@@ -102,6 +107,7 @@ export default function CardDetail({ card, variants, initialLanguage = "EN" }: {
 
   async function authenticated(nextUser: SessionUser) {
     setUser(nextUser);
+    setAuthOpen(false);
     const printingId = getCardDisplay(card, language).printing?.documentId;
     if (printingId && localWishlist.has(printingId)) await persist(owned, 1);
     else await loadEntry();
@@ -116,11 +122,11 @@ export default function CardDetail({ card, variants, initialLanguage = "EN" }: {
   }
 
   const favorite = user ? wanted > 0 : localWishlist.has(getCardDisplay(card, language).printing?.documentId || "");
-  const badge = [getRelationLabel(card.rarity, language), getRelationLabel(card.treatment, language)].filter(Boolean).join(" · ");
   const display = getCardDisplay(card, language);
+  const badge = getTreatmentLabel(display.treatment) || getRelationLabel(card.rarity, language);
   const image = display.image?.url;
   const languages = (["FR", "EN", "JP"] as CardLanguage[]).filter((item) =>
-    card.printings?.some((printing) => printing.language === item),
+    item === "EN" || card.printings?.some((printing) => printing.language === item),
   );
 
   return (
@@ -128,11 +134,12 @@ export default function CardDetail({ card, variants, initialLanguage = "EN" }: {
       <header className="detail-nav">
         <Link className="brand" href="/cards"><span className="brand__mark">M</span><span>MYTCG</span><strong>HUB</strong></Link>
         <Link className="back-link" href="/cards">← Retour aux cartes</Link>
-        <button className="profile-button" type="button" onClick={() => setAuthOpen(true)}>{user ? user.username.slice(0, 2).toUpperCase() : "OP"}</button>
+        <GameIdentity />
+        <WantedProfileButton user={user} onClick={() => setAuthOpen(true)} />
       </header>
 
       <section className="detail-heading">
-        <p>{card.cardId.replace("_", " · ")} <span>•</span> {getRelationLabel(card.rarity, language)} <span>•</span> {getRelationLabel(card.types?.[0], language)}</p>
+        <p>{display.cardId.replace("_", " · ")} <span>•</span> {getRelationLabel(card.rarity, language)} <span>•</span> {getRelationLabel(card.types?.[0], language)}</p>
         <h1>{display.name}</h1>
       </section>
 
@@ -141,7 +148,7 @@ export default function CardDetail({ card, variants, initialLanguage = "EN" }: {
           {image && (
             <Image
               src={getStrapiMediaUrl(image)}
-              alt={`${display.name} ${card.cardId}`}
+              alt={`${display.name} ${display.cardId}`}
               fill
               sizes="(max-width: 900px) 100vw, 42vw"
               quality={85}
@@ -175,18 +182,28 @@ export default function CardDetail({ card, variants, initialLanguage = "EN" }: {
 
           <div className="official-stats">
             <Stat label="Rareté" value={getRelationLabel(card.rarity, language) || null} />
-            <Stat label="Traitement" value={getRelationLabel(card.treatment, language) || "Non renseigné"} />
+            <Stat label="Traitement" value={getTreatmentLabel(display.treatment) || "Non renseigné"} />
             <Stat label={card.life !== null ? "Vie" : "Coût"} value={card.life ?? card.cost} />
-            <Stat label="Attribut" value={card.attributes?.map((item) => getRelationLabel(item, language)).join(", ")} />
+            <Stat label="Attribut" value={<AttributeValue attributes={card.attributes || []} language={language} />} />
             <Stat label="Puissance" value={card.power} />
             <Stat label="Contre" value={card.counter} />
             <Stat label="Couleur" value={card.colors?.map((item) => getRelationLabel(item, language)).join(", ")} />
             <Stat label="Type de carte" value={card.types?.map((item) => getRelationLabel(item, language)).join(", ")} />
           </div>
 
+          {display.distribution && (
+            <div className="distribution-details">
+              <div><span>Distribution</span><strong>{display.distribution}</strong></div>
+              {display.acquisition && <div><span>Obtention</span><strong>{display.acquisition}</strong></div>}
+              {display.event && <div><span>Événement</span><strong>{display.event}</strong></div>}
+              {display.distributionRegion && <div><span>Région</span><strong>{display.distributionRegion}</strong></div>}
+              {display.distributionSourceUrl && <a href={display.distributionSourceUrl} target="_blank" rel="noreferrer">Source officielle</a>}
+            </div>
+          )}
+
           <div className="detail-text"><h2>Type</h2><p>{card.features?.map((item) => getRelationLabel(item, language)).join(" / ") || "—"}</p></div>
           <div className="detail-text"><h2>Effet</h2><p>{display.effect || "Cette carte ne possède pas d’effet."}</p></div>
-          <Link className="detail-set" href={`/cards?set=${encodeURIComponent(display.set?.name || "")}`}><span>Extension</span><strong>{getRelationLabel(display.set, language) || "Non renseignée"}</strong></Link>
+          <Link className="detail-set" href={`/cards?set=${encodeURIComponent(display.set?.name || "")}`}><Image className="detail-set__anchor" src="/assets/one-piece/ico_anchor_red.png" alt="" width={22} height={29} /><span>Extension</span><strong>{getRelationLabel(display.set, language) || "Non renseignée"}</strong></Link>
         </section>
       </div>
 
@@ -219,6 +236,27 @@ export default function CardDetail({ card, variants, initialLanguage = "EN" }: {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string | number | null | undefined }) {
+function AttributeValue({ attributes, language }: { attributes: Card["attributes"]; language: CardLanguage }) {
+  if (!attributes.length) return <>—</>;
+  const names = new Set(attributes.map((item) => item.name));
+  const has = (...values: string[]) => values.every((value) => names.has(value));
+  const icon = has("Slash", "Strike") ? "ico_type06.png"
+    : has("Slash", "Special") ? "ico_type07.png"
+    : has("Strike", "Ranged") ? "ico_type08.png"
+    : has("Strike", "Special") ? "ico_type09.png"
+    : has("Strike", "Wisdom") ? "ico_type10.png"
+    : has("Slash", "Wisdom") ? "ico_type11.png"
+    : has("Special", "Wisdom") ? "ico_type13.png"
+    : names.has("Strike") ? "ico_type01.png"
+    : names.has("Slash") ? "ico_type02.png"
+    : names.has("Special") ? "ico_type03.png"
+    : names.has("Ranged") ? "ico_type04.png"
+    : names.has("Wisdom") ? "ico_type05.png"
+    : "ico_type12.png";
+  const label = attributes.map((item) => getRelationLabel(item, language)).join(" / ");
+  return <span className="attribute-value">{icon && <Image src={`/assets/one-piece/${icon}`} alt="" width={28} height={28} />}<span>{label}</span></span>;
+}
+
+function Stat({ label, value }: { label: string; value: ReactNode }) {
   return <div className="stat-row"><span>{label}</span><strong>{value ?? "—"}</strong></div>;
 }

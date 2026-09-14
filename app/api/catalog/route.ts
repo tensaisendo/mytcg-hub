@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
   const sort = request.nextUrl.searchParams.get("sort");
   const filters: CatalogFilters = {
     treatment: request.nextUrl.searchParams.get("treatment") || undefined,
+    distribution: request.nextUrl.searchParams.get("distribution") || undefined,
     query: request.nextUrl.searchParams.get("query") || undefined,
     setCode: request.nextUrl.searchParams.get("set") || undefined,
     rarity: request.nextUrl.searchParams.get("rarity") || undefined,

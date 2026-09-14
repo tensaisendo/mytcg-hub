@@ -1,17 +1,23 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { AuthDialog } from "@/components/AuthDialog";
+export { AuthDialog } from "@/components/AuthDialog";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import TcgCard from "@/components/TcgCard";
-import { getCardDisplay, getRelationLabel, getStrapiMediaUrl, type Card, type CardLanguage, type CatalogOptions } from "@/lib/strapi";
+import GameIdentity from "@/components/GameIdentity";
+import Image from "next/image";
+import WantedProfileButton from "@/components/WantedProfileButton";
+import { getExtensionLabel } from "@/lib/extension-label";
+import { getCardDisplay, getRelationLabel, getStrapiImageUrl, getTreatmentLabel, type Card, type CardLanguage, type CatalogOptions, type ExtensionSummary } from "@/lib/strapi";
 
 type View = "grid" | "list";
 type Sort = "code" | "name" | "price-asc" | "price-desc";
 type Section = "cards" | "sets" | "collection" | "wishlist";
-export type SessionUser = { id: number; username: string; email: string };
+export type SessionUser = { id: number; username: string; email: string; berries: number; avatar: { url: string; alternativeText?: string | null } | null; isAdmin: boolean };
 type Quantities = { ownedQuantity: number; wantedQuantity: number };
-type UserCards = Record<string, Quantities>;
+type UserCards = Record<string, Quantities & { language: CardLanguage }>;
 type UserCardEntry = { printing: { documentId: string; cardId: string; printingId: string; language: CardLanguage }; ownedQuantity: number; wantedQuantity: number };
 
 const optionLabels: Record<string, string> = {
@@ -41,31 +47,31 @@ function unique(values: Array<string | undefined>) {
   return [...deduplicated.values()].sort();
 }
 
-function groupVariants(cards: Card[]) {
+function groupVariants(cards: Card[], preserveSortedRepresentative = false) {
   const groups = new Map<string, Card>();
   for (const card of cards) {
     const key = card.displayCode || card.cardId.split("_")[0];
     const current = groups.get(key);
     const isBase = !card.variant && !card.cardId.includes("_");
     const currentIsBase = current && !current.variant && !current.cardId.includes("_");
-    if (!current || (isBase && !currentIsBase)) groups.set(key, card);
+    if (!current || (!preserveSortedRepresentative && isBase && !currentIsBase)) groups.set(key, card);
   }
   return [...groups.values()];
 }
 
 async function readUserCards(): Promise<UserCards> {
   const response = await fetch("/api/user-cards", { cache: "no-store" });
-  if (!response.ok) return {};
+  if (!response.ok) throw new Error("Collection request failed");
   const payload = await response.json();
   return Object.fromEntries(
     payload.data.map((entry: UserCardEntry) => [
       entry.printing.documentId,
-      { ownedQuantity: entry.ownedQuantity, wantedQuantity: entry.wantedQuantity },
+      { ownedQuantity: entry.ownedQuantity, wantedQuantity: entry.wantedQuantity, language: entry.printing.language },
     ]),
   );
 }
 
-export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, initialSection = "cards", initialSet = "", initialQuery = "", initialRarity = "", initialTreatment = "", initialColor = "", initialType = "", initialSort = "code", initialLanguage = "EN" }: { cards: Card[]; pageCount?: number; initialPage?: number; initialSection?: Section; initialSet?: string; initialQuery?: string; initialRarity?: string; initialTreatment?: string; initialColor?: string; initialType?: string; initialSort?: Sort; initialLanguage?: CardLanguage }) {
+export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, initialSection = "cards", initialExtensions = [], initialSet = "", initialQuery = "", initialRarity = "", initialTreatment = "", initialDistribution = "", initialColor = "", initialType = "", initialSort = "code", initialLanguage = "EN" }: { cards: Card[]; pageCount?: number; initialPage?: number; initialSection?: Section; initialExtensions?: ExtensionSummary[]; initialSet?: string; initialQuery?: string; initialRarity?: string; initialTreatment?: string; initialDistribution?: string; initialColor?: string; initialType?: string; initialSort?: Sort; initialLanguage?: CardLanguage }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -73,6 +79,7 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
   const [setCode, setSetCode] = useState(initialSet);
   const [rarity, setRarity] = useState(initialRarity);
   const [treatment, setTreatment] = useState(initialTreatment);
+  const [distribution, setDistribution] = useState(initialDistribution);
   const [color, setColor] = useState(initialColor);
   const [type, setType] = useState(initialType);
   const [sort, setSort] = useState<Sort>(initialSort);
@@ -88,19 +95,60 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
   const firstFilterRender = useRef(true);
   const skipNextFilterRequest = useRef(false);
   const filterCache = useRef(new Map<string, { cards: Card[]; pageCount: number; page: number }>());
-  const [catalogOptions, setCatalogOptions] = useState<CatalogOptions>({ sets: [], rarities: [], colors: [], types: [], treatments: [] });
+  const [catalogOptions, setCatalogOptions] = useState<CatalogOptions>({ sets: [], rarities: [], colors: [], types: [], treatments: [], distributions: [] });
   const [user, setUser] = useState<SessionUser | null>(null);
   const [userCards, setUserCards] = useState<UserCards>({});
   const [authOpen, setAuthOpen] = useState(false);
+  const [accountMessage, setAccountMessage] = useState("");
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [collectionLoading, setCollectionLoading] = useState(initialSection === "collection");
+  const [collectionTotal, setCollectionTotal] = useState(0);
+  const [collectionRevision, setCollectionRevision] = useState(0);
+  const collectionRequest = useRef(0);
 
   useEffect(() => {
+    if (section !== "collection" || !sessionLoaded) return;
+    collectionRequest.current += 1;
+    setLoadingMore(false);
+    if (!user) {
+      setCatalogCards([]);
+      setCollectionLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setCollectionLoading(true);
+    setLoadMoreError("");
+    const params = new URLSearchParams({ page: "1", lang: language, query, set: setCode, rarity, treatment, distribution, color, type, sort });
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/collection?${params}`, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error("Collection request failed");
+        const result = await response.json();
+        if (controller.signal.aborted) return;
+        setCatalogCards(result.cards);
+        setCatalogPageCount(result.pageCount);
+        setCollectionTotal(result.total);
+        setLoadedPage(1);
+        setVisible(12);
+      } catch {
+        if (!controller.signal.aborted) setLoadMoreError("Impossible de charger la collection. Réessaie en actualisant la page.");
+      } finally {
+        if (!controller.signal.aborted) setCollectionLoading(false);
+      }
+    }, query ? 250 : 0);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [section, sessionLoaded, user, language, query, setCode, rarity, treatment, distribution, color, type, sort, collectionRevision]);
+
+  useEffect(() => {
+    if (section === "collection") return;
     setCatalogCards(cards);
     setCatalogPageCount(pageCount);
     setLoadedPage(initialPage);
     setVisible(12);
-  }, [cards, initialPage, pageCount]);
+  }, [cards, initialPage, pageCount, section]);
 
   useEffect(() => {
+    if (section !== "cards") return;
     if (firstFilterRender.current) {
       firstFilterRender.current = false;
       return;
@@ -116,11 +164,12 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
       if (setCode) params.set("set", setCode);
       if (rarity) params.set("rarity", rarity);
       if (treatment) params.set("treatment", treatment);
+      if (distribution) params.set("distribution", distribution);
       if (color) params.set("color", color);
       if (type) params.set("type", type);
       if (sort !== "code") params.set("sort", sort);
       const url = new URL(window.location.href);
-      ["query", "set", "rarity", "treatment", "color", "type", "sort"].forEach((key) => url.searchParams.delete(key));
+      ["query", "set", "rarity", "treatment", "distribution", "color", "type", "sort"].forEach((key) => url.searchParams.delete(key));
       params.forEach((value, key) => { if (key !== "page" && key !== "lang") url.searchParams.set(key, value); });
       window.history.replaceState(null, "", url);
       const cacheKey = params.toString();
@@ -133,7 +182,7 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
         return;
       }
       try {
-        const response = await fetch(`/api/catalog?${params}`, { cache: "force-cache", signal: controller.signal });
+        const response = await fetch(`/api/catalog?${params}`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("Catalog filter request failed");
         const result = await response.json() as { cards: Card[]; pageCount: number; page: number };
         filterCache.current.set(cacheKey, result);
@@ -150,11 +199,11 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [color, language, query, rarity, treatment, setCode, sort, type]);
+  }, [color, distribution, language, query, rarity, treatment, section, setCode, sort, type]);
 
   useEffect(() => {
     let active = true;
-    const storageKey = `mytcg-catalog-options-v2-${language}`;
+    const storageKey = `mytcg-catalog-options-v3-${language}`;
     try {
       const stored = window.sessionStorage.getItem(storageKey);
       if (stored) setCatalogOptions(JSON.parse(stored) as CatalogOptions);
@@ -191,12 +240,15 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
       .then((response) => response.ok ? response.json() : null)
       .then(async (payload) => {
         if (!active || !payload?.user) return;
+        setUser(payload.user);
         const entries = await readUserCards();
         if (active) {
           setUser(payload.user);
           setUserCards(entries);
         }
-      });
+      }).catch(() => {
+        if (active) setAccountMessage("Impossible de charger ta collection. Réessaie en actualisant la page.");
+      }).finally(() => { if (active) setSessionLoaded(true); });
     return () => { active = false; };
   }, []);
 
@@ -217,6 +269,7 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
 
   const options = useMemo(() => ({
     treatments: unique((catalogOptions.treatments || []).map((relation) => relation.name)),
+    distributions: unique(catalogOptions.distributions || []),
     sets: unique((catalogOptions.sets.length ? catalogOptions.sets : catalogCards.map((card) => card.set).filter((relation): relation is NonNullable<typeof relation> => Boolean(relation))).map((relation) => relation.code || relation.name)),
     rarities: unique((catalogOptions.rarities.length ? catalogOptions.rarities : catalogCards.map((card) => card.rarity).filter((relation): relation is NonNullable<typeof relation> => Boolean(relation))).map((relation) => relation.name)),
     colors: unique((catalogOptions.colors.length ? catalogOptions.colors : catalogCards.flatMap((card) => card.colors)).map((relation) => relation.name)),
@@ -230,7 +283,7 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
         card.set,
         getCardDisplay(card, language).set,
         card.rarity,
-        card.treatment,
+        getCardDisplay(card, language).treatment,
         ...card.colors,
         ...card.types,
       ]) {
@@ -240,6 +293,9 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
     for (const relation of [...catalogOptions.sets, ...catalogOptions.rarities, ...catalogOptions.colors, ...catalogOptions.types, ...(catalogOptions.treatments || [])]) {
       if (relation.name) labels[relation.name] = getRelationLabel(relation, language);
       if (relation.code) labels[relation.code] = getRelationLabel(relation, language);
+    }
+    for (const treatment of [...(catalogOptions.treatments || []), ...catalogCards.map((card) => getCardDisplay(card, language).treatment)]) {
+      if (treatment?.name) labels[treatment.name] = getTreatmentLabel(treatment);
     }
     return labels;
   }, [catalogCards, catalogOptions, language]);
@@ -253,30 +309,31 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
     Object.entries(userCards).filter(([, value]) => value.ownedQuantity > 0).map(([printingId]) => printingId),
   ), [userCards]);
 
-  const langOwnedCount = useMemo(() => {
-    return catalogCards.filter((card) => {
-      const printingId = getCardDisplay(card, language).printing?.documentId || "";
-      return ownedCardIds.has(printingId);
-    }).length;
-  }, [catalogCards, language, ownedCardIds]);
+  const langOwnedCount = useMemo(() => Object.values(userCards).filter(
+    (entry) => entry.language === language && entry.ownedQuantity > 0,
+  ).length, [language, userCards]);
 
   const langWishlistCount = useMemo(() => {
+    if (user) return Object.values(userCards).filter(
+      (entry) => entry.language === language && entry.wantedQuantity > 0,
+    ).length;
     return catalogCards.filter((card) => {
       const printingId = getCardDisplay(card, language).printing?.documentId || "";
       return favorites.has(printingId);
     }).length;
-  }, [catalogCards, favorites, language]);
+  }, [catalogCards, favorites, language, user, userCards]);
 
   function filterAndSortCards(source: Card[]) {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return source.filter((card) => {
       const display = getCardDisplay(card, language);
       if (language !== "EN" && !display.printing) return false;
-      const matchesQuery = !normalizedQuery || display.name.toLocaleLowerCase().includes(normalizedQuery) || card.cardId.toLocaleLowerCase().includes(normalizedQuery);
+      const matchesQuery = !normalizedQuery || display.name.toLocaleLowerCase().includes(normalizedQuery) || display.cardId.toLocaleLowerCase().includes(normalizedQuery);
       return matchesQuery &&
         (!setCode || display.set?.code === setCode) &&
         (!rarity || card.rarity?.name === rarity) &&
-        (!treatment || card.treatment?.name === treatment) &&
+        (!treatment || display.treatment?.name === treatment) &&
+        (!distribution || display.distribution === distribution) &&
         (!color || card.colors.some(({ name }) => name === color)) &&
         (!type || card.types.some(({ name }) => name === type)) &&
         (section !== "wishlist" || favorites.has(display.printing?.documentId || "")) &&
@@ -291,9 +348,9 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
     });
   }
 
-  const filtered = useMemo(() => filterAndSortCards(catalogCards), [catalogCards, color, favorites, language, ownedCardIds, query, rarity, treatment, section, setCode, sort, type]);
+  const filtered = useMemo(() => filterAndSortCards(catalogCards), [catalogCards, color, distribution, favorites, language, ownedCardIds, query, rarity, treatment, section, setCode, sort, type]);
 
-  const groupedFiltered = useMemo(() => groupVariants(filtered), [filtered]);
+  const groupedFiltered = useMemo(() => section === "collection" ? filtered : groupVariants(filtered, sort === "price-asc" || sort === "price-desc"), [filtered, section, sort]);
 
   function updateFilter(setter: (value: string) => void, value: string) {
     setter(value);
@@ -303,6 +360,28 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
   async function loadMore() {
     if (loadingMore) return;
     setLoadMoreError("");
+    if (section === "collection") {
+      const request = collectionRequest.current;
+      setLoadingMore(true);
+      try {
+        const params = new URLSearchParams({ page: String(loadedPage + 1), lang: language, query, set: setCode, rarity, treatment, distribution, color, type, sort });
+        const response = await fetch(`/api/collection?${params}`, { cache: "no-store" });
+        if (!response.ok) throw new Error("Collection request failed");
+        const result = await response.json();
+        if (request !== collectionRequest.current) return;
+        setCatalogCards((current) => {
+          const ids = new Set(current.map((card) => card.documentId));
+          return [...current, ...result.cards.filter((card: Card) => !ids.has(card.documentId))];
+        });
+        setLoadedPage(result.page);
+        setCatalogPageCount(result.pageCount);
+        setCollectionTotal(result.total);
+        setVisible((count) => count + 12);
+      } catch {
+        if (request === collectionRequest.current) setLoadMoreError("Impossible de charger les cartes suivantes. Réessaie.");
+      } finally { if (request === collectionRequest.current) setLoadingMore(false); }
+      return;
+    }
     const targetVisible = visible + 12;
     if (groupedFiltered.length >= targetVisible) {
       setVisible((count) => count + 12);
@@ -324,6 +403,7 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
         if (setCode) params.set("set", setCode);
         if (rarity) params.set("rarity", rarity);
         if (treatment) params.set("treatment", treatment);
+        if (distribution) params.set("distribution", distribution);
         if (color) params.set("color", color);
         if (type) params.set("type", type);
         if (sort !== "code") params.set("sort", sort);
@@ -332,7 +412,7 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
         const nextPage = await response.json() as { cards: Card[]; page: number };
         const existing = new Set(nextCatalogCards.map((card) => card.documentId));
         nextCatalogCards = [...nextCatalogCards, ...nextPage.cards.filter((card) => !existing.has(card.documentId))];
-        nextGrouped = groupVariants(filterAndSortCards(nextCatalogCards));
+        nextGrouped = groupVariants(filterAndSortCards(nextCatalogCards), sort === "price-asc" || sort === "price-desc");
         nextPageNumber = (nextPage.page || nextPageNumber) + 1;
       }
 
@@ -350,16 +430,23 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
     const display = getCardDisplay(card, language);
     const printingId = display.printing?.documentId;
     if (!printingId) return;
-    const previous = userCards[printingId] || { ownedQuantity: 0, wantedQuantity: 0 };
-    setUserCards((current) => ({ ...current, [printingId]: quantities }));
-    const response = await fetch(`/api/user-cards/${printingId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: quantities }),
-    });
-    if (!response.ok) {
-      setUserCards((current) => ({ ...current, [printingId]: previous }));
+    const previous = userCards[printingId] || { ownedQuantity: 0, wantedQuantity: 0, language };
+    setUserCards((current) => ({ ...current, [printingId]: { ...quantities, language } }));
+    try {
+      const response = await fetch(`/api/user-cards/${printingId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: quantities }),
+      });
       if (response.status === 401 || response.status === 403) setAuthOpen(true);
+      if (!response.ok) throw new Error("Collection update failed");
+      const payload = await response.json();
+      if (typeof payload.meta?.berries === "number") setUser((current) => current ? { ...current, berries: payload.meta.berries } : current);
+      setAccountMessage("");
+      if (section === "collection" && (previous.ownedQuantity > 0) !== (quantities.ownedQuantity > 0)) setCollectionRevision((value) => value + 1);
+    } catch {
+      setUserCards((current) => ({ ...current, [printingId]: previous }));
+      setAccountMessage("La modification n’a pas été enregistrée. Réessaie.");
     }
   }
 
@@ -389,27 +476,44 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
 
   async function handleAuthenticated(authenticatedUser: SessionUser) {
     setUser(authenticatedUser);
+    setAuthOpen(false);
+    setAccountMessage("Connecté en tant que " + authenticatedUser.username + ".");
+    try {
+      await syncCollection();
+    } catch {
+      setAccountMessage("Tu es connecté, mais la collection n’a pas pu être synchronisée. Tes favoris locaux sont conservés.");
+    }
+  }
+
+  async function syncCollection() {
     let entries = await readUserCards();
+    setUserCards(entries);
+    const remaining = new Set(localWishlist);
     const byPrintingId = new Map(catalogCards.map((card) => [getCardDisplay(card, language).printing?.documentId || "", card]));
     for (const printingId of localWishlist) {
       const card = byPrintingId.get(printingId);
-      if (!card || entries[printingId]?.wantedQuantity) continue;
+      if (!card) continue;
+      if (entries[printingId]?.wantedQuantity) { remaining.delete(printingId); continue; }
       const quantities = { ownedQuantity: entries[printingId]?.ownedQuantity || 0, wantedQuantity: 1 };
-      await fetch(`/api/user-cards/${printingId}`, {
+      const response = await fetch(`/api/user-cards/${printingId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data: quantities }),
       });
+      if (!response.ok) throw new Error("Wishlist synchronization failed");
+      entries = { ...entries, [printingId]: { ...quantities, language } };
+      remaining.delete(printingId);
     }
-    entries = await readUserCards();
     setUserCards(entries);
-    window.localStorage.removeItem("mytcg-wishlist");
+    window.localStorage.setItem("mytcg-wishlist", JSON.stringify([...remaining]));
     window.dispatchEvent(new Event("mytcg-wishlist"));
     setAuthOpen(false);
   }
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    const response = await fetch("/api/auth/logout", { method: "POST" });
+    if (!response.ok) throw new Error("Logout failed");
+    setAccountMessage("");
     setUser(null);
     setUserCards({});
     setSection("cards");
@@ -426,14 +530,15 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
   return (
     <main className="catalog-shell">
       <header className="site-header">
-        <Link className="brand" href="/cards" aria-label="Cartes MYTCG Hub">
+        <Link className="brand" href={`/cards?lang=${language}`} aria-label="Cartes MYTCG Hub">
           <span className="brand__mark">M</span><span>MYTCG</span><strong>HUB</strong>
         </Link>
+        <GameIdentity />
         <nav className="main-nav" aria-label="Navigation principale">
-          <Link className={section === "cards" ? "is-active" : ""} href="/cards">Cartes</Link>
-          <Link className={section === "sets" ? "is-active" : ""} href="/sets">Extensions</Link>
-          <Link className={section === "collection" ? "is-active" : ""} href="/collection">Collection{langOwnedCount > 0 ? <b>{langOwnedCount}</b> : null}</Link>
-          <Link className={section === "wishlist" ? "is-active" : ""} href="/wishlist">Liste d’envies{langWishlistCount > 0 ? <b>{langWishlistCount}</b> : null}</Link>
+          <Link className={section === "cards" ? "is-active" : ""} href={`/cards?lang=${language}`}>Cartes</Link>
+          <Link className={section === "sets" ? "is-active" : ""} href={`/sets?lang=${language}`}>Extensions</Link>
+          <Link className={section === "collection" ? "is-active" : ""} href={`/collection?lang=${language}`}>Collection{langOwnedCount > 0 ? <b>{langOwnedCount}</b> : null}</Link>
+          <Link className={section === "wishlist" ? "is-active" : ""} href={`/wishlist?lang=${language}`}>Liste d’envies{langWishlistCount > 0 ? <b>{langWishlistCount}</b> : null}</Link>
           <Link href="/decks">Decks</Link>
         </nav>
         <div className="language-switch" aria-label="Langue du site">
@@ -442,35 +547,37 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
           ))}
         </div>
         <label className="header-search"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => updateFilter(setQuery, event.target.value)} placeholder="Rechercher une carte..." aria-label="Rechercher une carte" /></label>
-        <button className="profile-button" type="button" aria-label="Ouvrir le profil" onClick={() => setAuthOpen(true)}>{user ? user.username.slice(0, 2).toUpperCase() : "OP"}</button>
+        <WantedProfileButton user={user} onClick={() => setAuthOpen(true)} />
       </header>
 
       <section className="catalog-content">
+        {accountMessage && <p className="account-status" role="status">{accountMessage}</p>}
         {section === "sets" ? (
-          <ExtensionsView cards={cards} language={language} ownedCardIds={ownedCardIds} authenticated={Boolean(user)} onLogin={() => setAuthOpen(true)} />
+          <ExtensionsView extensions={initialExtensions} language={language} ownedCardIds={ownedCardIds} authenticated={Boolean(user)} onLogin={() => setAuthOpen(true)} />
         ) : (
         <>
-        <div className="catalog-title"><div><h1>{sectionTitle}</h1><p>{sectionSubtitle}</p></div><p><strong>{groupedFiltered.length}</strong> cartes uniques sur {catalogCards.length} chargées</p></div>
+        <div className="catalog-title"><div><h1>{sectionTitle}</h1><p>{sectionSubtitle}</p></div><p><strong>{groupedFiltered.length}</strong> cartes {section === "collection" ? `sur ${collectionTotal}` : `uniques sur ${catalogCards.length} chargées`}</p></div>
         <div className="filter-bar">
           <label className="filter-search"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => updateFilter(setQuery, event.target.value)} placeholder="Nom ou code de carte" aria-label="Rechercher par nom ou code de carte" /></label>
           <Filter label="Extension" value={setCode} options={options.sets} optionLabels={displayLabels} onChange={(value) => updateFilter(setSetCode, value)} />
           <Filter label="Rareté" value={rarity} options={options.rarities} optionLabels={displayLabels} onChange={(value) => updateFilter(setRarity, value)} />
           <Filter label="Traitement" value={treatment} options={options.treatments} optionLabels={displayLabels} onChange={(value) => updateFilter(setTreatment, value)} />
+          <Filter label="Distribution" value={distribution} options={options.distributions} optionLabels={displayLabels} onChange={(value) => updateFilter(setDistribution, value)} />
           <Filter label="Couleur" value={color} options={options.colors} optionLabels={displayLabels} onChange={(value) => updateFilter(setColor, value)} />
           <Filter label="Type" value={type} options={options.types} optionLabels={displayLabels} onChange={(value) => updateFilter(setType, value)} />
           <label className="select-control sort-control"><span>Trier</span><select value={sort} onChange={(event) => setSort(event.target.value as Sort)}><option value="code">Code de carte</option><option value="name">Nom</option><option value="price-asc">Prix croissant</option><option value="price-desc">Prix décroissant</option></select></label>
           <div className="view-toggle" aria-label="Mode d’affichage"><button className={view === "grid" ? "is-active" : ""} onClick={() => setView("grid")} type="button" title="Vue grille" aria-label="Vue grille">▦</button><button className={view === "list" ? "is-active" : ""} onClick={() => setView("list")} type="button" title="Vue liste" aria-label="Vue liste">☷</button></div>
         </div>
 
-        {filtered.length ? <>
+        {section === "collection" && collectionLoading ? <p role="status">Chargement de ta collection...</p> : section === "collection" && !user ? <div className="empty-state"><Image src="/assets/one-piece/card-backs.webp" alt="" width={1072} height={512} /><p>Connecte-toi pour retrouver ta collection.</p><button type="button" onClick={() => setAuthOpen(true)}>Se connecter</button></div> : section === "collection" && loadMoreError && !filtered.length ? null : filtered.length ? <>
           <div className={`cards-grid cards-grid--${view}`}>{groupedFiltered.slice(0, visible).map((card) => {
             const display = getCardDisplay(card, language);
             const printingId = display.printing?.documentId || "";
             return <TcgCard key={printingId || card.documentId} card={card} view={view} language={language} favorite={favorites.has(printingId)} ownedQuantity={userCards[printingId]?.ownedQuantity || 0} onToggleFavorite={() => toggleFavorite(card)} onOwnedChange={(quantity) => changeOwned(card, quantity)} priority={filtered.indexOf(card) < 12} />;
           })}</div>
           {(visible < groupedFiltered.length || loadedPage < catalogPageCount) && <button className="load-more" type="button" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? "Chargement..." : "Afficher plus"} {!loadingMore && <span>12</span>}</button>}
-          {loadMoreError && <p className="load-more-error" role="alert">{loadMoreError}</p>}
-        </> : <div className="empty-state"><p>{section === "wishlist" ? "Ta liste d’envies est vide." : section === "collection" ? "Ta collection est vide." : "Aucune carte ne correspond à ces filtres."}</p><button type="button" onClick={() => { setQuery(""); setSetCode(""); setRarity(""); setTreatment(""); setColor(""); setType(""); setSection("cards"); }}>Retour aux cartes</button></div>}
+        </> : <div className="empty-state"><Image src="/assets/one-piece/card-backs.webp" alt="" width={1072} height={512} /><p>{section === "wishlist" ? "Ta liste d’envies est vide." : section === "collection" ? "Aucune carte de ta collection ne correspond à cette langue et à ces filtres." : "Aucune carte ne correspond à ces filtres."}</p><button type="button" onClick={() => router.push(`/cards?lang=${language}`)}>Retour aux cartes</button></div>}
+        {loadMoreError && <p className="load-more-error" role="alert">{loadMoreError}</p>}
         </>
         )}
       </section>
@@ -480,25 +587,51 @@ export default function CardsCatalog({ cards, pageCount = 1, initialPage = 1, in
   );
 }
 
-function ExtensionsView({ cards, language, ownedCardIds, authenticated, onLogin }: { cards: Card[]; language: CardLanguage; ownedCardIds: Set<string>; authenticated: boolean; onLogin: () => void }) {
-  const extensions = useMemo(() => {
-    const grouped = new Map<string, Card[]>();
-    for (const card of cards) {
-      const display = getCardDisplay(card, language);
-      if (language !== "EN" && !display.printing) continue;
-      const displaySet = display.set;
-      const name = displaySet?.name || "Sans extension";
-      grouped.set(name, [...(grouped.get(name) || []), card]);
-    }
-    return [...grouped.entries()].map(([name, extensionCards]) => ({
-      name,
-      displayName: getRelationLabel(getCardDisplay(extensionCards[0], language).set, language) || name,
-      code: getCardDisplay(extensionCards[0], language).set?.code || name.split(" ")[0],
-      cards: extensionCards,
-      owned: extensionCards.filter((card) => ownedCardIds.has(getCardDisplay(card, language).printing?.documentId || "")).length,
-      image: getCardDisplay(extensionCards.find((card) => getCardDisplay(card, language).image?.url) || extensionCards[0], language).image?.url,
-    })).sort((a, b) => b.code.localeCompare(a.code, undefined, { numeric: true }));
-  }, [cards, language, ownedCardIds]);
+function ExtensionsView({ extensions: summaries, language, ownedCardIds, authenticated, onLogin }: { extensions: ExtensionSummary[]; language: CardLanguage; ownedCardIds: Set<string>; authenticated: boolean; onLogin: () => void }) {
+  const extensionFamily = (code: string) => {
+    const normalized = code.toUpperCase();
+    if (normalized.startsWith("ST")) return { key: "st", label: "Starter Deck" };
+    if (normalized.startsWith("EB")) return { key: "eb", label: "Extra Booster" };
+    if (normalized.startsWith("PRB")) return { key: "prb", label: "Premium Booster" };
+    if (normalized.includes("PROMO")) return { key: "promo", label: "Promotion" };
+    return { key: "op", label: "Booster Pack" };
+  };
+  const extensions = useMemo(() => summaries.map((extension) => ({
+    ...extension,
+    displayName: getExtensionLabel(extension, language),
+    owned: extension.printingIds.filter((id) => ownedCardIds.has(id)).length,
+  })).sort((a, b) => b.code.localeCompare(a.code, undefined, { numeric: true })), [language, ownedCardIds, summaries]);
+
+  const extensionTheme = (code: string, name: string) => {
+    const normalizedCode = code.toUpperCase().replaceAll("-", "");
+    const normalizedName = name.toUpperCase();
+    const palettes: Record<string, [string, string]> = {
+      OP01: ["#d12b37", "#5b141b"], OP02: ["#4489ba", "#183853"],
+      OP03: ["#e7b42f", "#6b4c0d"], OP04: ["#9b69cb", "#43255e"],
+      OP05: ["#d95491", "#632140"], OP06: ["#496fb6", "#1d315c"],
+      OP07: ["#43b8cc", "#185563"], OP08: ["#e07c38", "#682f15"],
+      OP09: ["#d7a83f", "#653f16"], OP10: ["#b82d47", "#591525"],
+      OP11: ["#51a568", "#1d4b2b"], OP12: ["#4b8ac1", "#1d4160"],
+      OP13: ["#db4b45", "#67201e"], OP14: ["#2da5c7", "#125068"],
+      OP15: ["#e5ae36", "#684b10"], OP16: ["#d1363f", "#65171d"],
+      OP17: ["#d9a82e", "#66480d"], EB01: ["#4ca58d", "#1b4c41"],
+      EB02: ["#58bcd6", "#1a5262"], EB03: ["#df6ca5", "#682b49"],
+      EB04: ["#42b6cb", "#185662"], EB05: ["#d96aa3", "#652a48"],
+      PRB01: ["#d9a83c", "#624718"], PRB02: ["#d04a42", "#65231e"],
+    };
+    const colorNames: Array<[string, [string, string]]> = [
+      ["RED", ["#df3d48", "#681921"]], ["BLUE", ["#438ed0", "#173e64"]],
+      ["GREEN", ["#45a969", "#194a2b"]], ["PURPLE", ["#9a64cf", "#40265d"]],
+      ["BLACK", ["#8993a0", "#252b33"]], ["YELLOW", ["#e4bd3e", "#66500f"]],
+    ];
+    const palette = palettes[normalizedCode]
+      || colorNames.find(([color]) => normalizedName.includes(color))?.[1]
+      || ["#ed4b5c", "#681d28"];
+    return {
+      "--extension-accent": palette[0],
+      "--extension-depth": palette[1],
+    } as CSSProperties;
+  };
 
   return (
     <>
@@ -508,33 +641,29 @@ function ExtensionsView({ cards, language, ownedCardIds, authenticated, onLogin 
       </div>
       <div className="extensions-grid">
         {extensions.map((extension) => {
-          const progress = extension.cards.length
-            ? Math.round((extension.owned / extension.cards.length) * 100)
+          const progress = extension.count
+            ? Math.round((extension.owned / extension.count) * 100)
             : 0;
+          const family = extensionFamily(extension.code);
+          const imageUrl = getStrapiImageUrl(extension.image, "medium");
           return (
-            <article className="extension-card" key={extension.name}>
-              <div className="extension-card__visual">
-                {extension.image && (
-                  <img
-                    src={getStrapiMediaUrl(extension.image)}
-                    alt=""
-                    className="extension-card__image"
-                    loading="lazy"
-                    decoding="async"
-                  />
-                )}
-                <span>{extension.code}</span>
+            <article className={`extension-card extension-card--${family.key}`} key={extension.name} style={extensionTheme(extension.code, extension.name)}>
+              <div className={`extension-card__media${imageUrl ? "" : " is-empty"}`}>
+                {imageUrl
+                  ? <Image src={imageUrl} alt={extension.displayName} fill unoptimized sizes="(max-width: 700px) 100vw, (max-width: 1100px) 50vw, 25vw" />
+                  : <span className="extension-card__placeholder">{extension.code}</span>}
+                <span className="extension-card__family">{family.label}</span>
+                <strong className="extension-card__code">{extension.code}</strong>
               </div>
               <div className="extension-card__body">
-                <h2>{extension.displayName.replace(/^\S+\s+-\s+/, "")}</h2>
-                <p>{extension.cards.length} cartes</p>
+                <h2>{extension.displayName}</h2>
                 <div className="progress-row">
-                  <span>{authenticated ? `${extension.owned} possédées` : "Progression"}</span>
+                  <span>{extension.count} cartes{authenticated ? ` · ${extension.owned} possédées` : ""}</span>
                   <strong>{progress}%</strong>
                 </div>
                 <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
                 <div className="extension-card__actions">
-                  <Link href={`/cards?set=${encodeURIComponent(extension.name)}`}>Voir les cartes</Link>
+                  <Link href={`/cards?set=${encodeURIComponent(extension.code)}&lang=${language}`}>Voir les cartes</Link>
                   {!authenticated && <button type="button" onClick={onLogin}>Se connecter</button>}
                 </div>
               </div>
@@ -548,32 +677,4 @@ function ExtensionsView({ cards, language, ownedCardIds, authenticated, onLogin 
 
 function Filter({ label, value, options, optionLabels, onChange }: { label: string; value: string; options: string[]; optionLabels: Record<string, string>; onChange: (value: string) => void }) {
   return <label className="select-control"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="">Tous</option>{options.map((option) => <option value={option} key={option}>{optionLabels[option] || option}</option>)}</select></label>;
-}
-
-export function AuthDialog({ user, onClose, onAuthenticated, onLogout }: { user: SessionUser | null; onClose: () => void; onAuthenticated: (user: SessionUser) => Promise<void>; onLogout: () => Promise<void> }) {
-  const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">("login");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
-    const values = Object.fromEntries(new FormData(event.currentTarget));
-    const body = mode === "login"
-      ? { identifier: values.email, password: values.password }
-      : mode === "register"
-        ? { username: values.username, email: values.email, password: values.password }
-        : mode === "forgot"
-          ? { email: values.email }
-          : { code: values.code, password: values.password, passwordConfirmation: values.passwordConfirmation };
-    const endpoint = mode === "forgot" ? "forgot-password" : mode === "reset" ? "reset-password" : mode;
-    const response = await fetch(`/api/auth/${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const payload = await response.json();
-    if (!response.ok) { setError(payload.error?.message || "Impossible de continuer."); setBusy(false); return; }
-    if (mode === "forgot") { setSuccess("Si l’adresse existe, un lien de réinitialisation a été envoyé."); setBusy(false); return; }
-    if (mode === "reset") { setSuccess("Mot de passe réinitialisé. Tu peux te connecter."); setMode("login"); setBusy(false); return; }
-    await onAuthenticated(payload.user); setBusy(false);
-  }
-
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button className="modal-close" type="button" onClick={onClose} aria-label="Fermer">×</button>{user ? <><p className="auth-kicker">Compte MYTCG</p><h2 id="auth-title">{user.username}</h2><p className="auth-email">{user.email}</p><button className="auth-submit is-secondary" type="button" onClick={() => void onLogout()}>Se déconnecter</button></> : <><p className="auth-kicker">Synchronise ta collection</p><h2 id="auth-title">{mode === "login" ? "Connexion" : mode === "register" ? "Créer un compte" : mode === "forgot" ? "Mot de passe oublié" : "Réinitialiser le mot de passe"}</h2><div className="auth-tabs"><button className={mode === "login" ? "is-active" : ""} type="button" onClick={() => setMode("login")}>Connexion</button><button className={mode === "register" ? "is-active" : ""} type="button" onClick={() => setMode("register")}>Inscription</button><button className={mode === "forgot" ? "is-active" : ""} type="button" onClick={() => setMode("forgot")}>Reset</button><button className={mode === "reset" ? "is-active" : ""} type="button" onClick={() => setMode("reset")}>Nouveau mdp</button></div><form onSubmit={submit}>{mode === "register" && <label>Nom d’utilisateur<input name="username" minLength={3} required autoComplete="username" /></label>}{(mode === "login" || mode === "register" || mode === "forgot") && <label>Adresse e-mail<input name="email" type="email" required autoComplete="email" /></label>}{mode === "reset" && <label>Code de réinitialisation<input name="code" required autoComplete="one-time-code" /></label>}{mode !== "forgot" && mode !== "reset" && <label>Mot de passe<input name="password" type="password" minLength={8} required autoComplete={mode === "login" ? "current-password" : "new-password"} /></label>}{mode === "reset" && <><label>Nouveau mot de passe<input name="password" type="password" required autoComplete="new-password" /></label><label>Confirmation<input name="passwordConfirmation" type="password" required autoComplete="new-password" /></label></>}{error && <p className="auth-error">{error}</p>}{success && <p className="auth-success">{success}</p>}{mode === "login" && <button className="auth-link" type="button" onClick={() => setMode("forgot")}>Mot de passe oublié ?</button>}<button className="auth-submit" disabled={busy} type="submit">{busy ? "Patiente un instant..." : mode === "login" ? "Se connecter" : mode === "register" ? "Créer mon compte" : mode === "forgot" ? "Envoyer le lien" : "Réinitialiser"}</button></form></>}</section></div>;
 }

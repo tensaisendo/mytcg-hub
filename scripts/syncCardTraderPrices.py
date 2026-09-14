@@ -140,6 +140,9 @@ def main():
     parser.add_argument("--delay", type=float, default=1.05)
     args = parser.parse_args()
 
+    if args.table == "card_printings":
+        parser.error("This legacy sync is EN-only. Use sync:cardtrader-printing-price with an explicit language and verified blueprint instead.")
+
     mapping = json.loads(MAPPING_PATH.read_text(encoding="utf-8"))
     items = list(mapping.items())
     cache = json.loads(CACHE_PATH.read_text(encoding="utf-8")) if CACHE_PATH.exists() else {"prices": {}, "failures": {}}

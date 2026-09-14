@@ -13,22 +13,26 @@ export async function strapiAuthRequest(path: string, init: RequestInit = {}) {
   if (!token) return new Response(null, { status: 401 });
   const url = `${STRAPI_URL}${path}`;
   let lastError: unknown;
+  const method = init.method?.toUpperCase() || "GET";
+  // GET and PUT are safe to replay when Strapi briefly restarts in development.
+  const attempts = method === "GET" || method === "PUT" ? 2 : 1;
 
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return await fetch(url, {
         ...init,
         headers: {
-          "Content-Type": "application/json",
+          ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...init.headers,
         },
         cache: "no-store",
+        signal: init.signal || AbortSignal.timeout(Number(process.env.AUTH_SESSION_TIMEOUT_MS || 30000)),
       });
     } catch (error) {
       lastError = error;
       const code = (error as { cause?: { code?: string } })?.cause?.code;
-      if (attempt < 4 && (!code || RETRYABLE_CODES.has(code))) {
+      if (attempt < attempts && (!code || RETRYABLE_CODES.has(code))) {
         await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
         continue;
       }

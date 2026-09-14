@@ -280,6 +280,14 @@ async function getExistingCardIds() {
 // -------------------------
 
 async function importCards() {
+  if (!DRY_RUN) {
+    const response = await api.get("/sets", {
+      params: { "filters[language][$notNull]": true, "pagination[pageSize]": 1 },
+    });
+    if (response.data.data?.length) {
+      throw new Error("Localized Sets require importCardsFromMedia.js. Legacy WordPress writes are disabled to preserve product/language relations.");
+    }
+  }
   console.log(`🚀 Importing ${cardsToImport.length}/${cards.length} cards...`);
   console.log(`🧪 DRY RUN = ${DRY_RUN}\n`);
   const relationMaps = await loadRelationMaps();
@@ -440,4 +448,7 @@ async function importCards() {
   console.log("\n🎉 DONE");
 }
 
-importCards();
+importCards().catch((error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});

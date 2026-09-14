@@ -18,12 +18,21 @@ function flattenProducts(value) {
   return Object.values(value).flatMap(flattenProducts);
 }
 
-function getOffer(product) {
+function getOffer(product, options = {}) {
   const cents = Number(product.price?.cents ?? product.price_cents);
   const currency = product.price?.currency ?? product.price_currency;
   const properties = product.properties_hash || product.properties || {};
   const condition = properties.condition;
   const country = product.user?.country_code;
+
+  if (options.language) {
+    const language = String(properties.onepiece_language || "").toLowerCase();
+    const expected = options.language.toLowerCase() === "ja" ? "jp" : options.language.toLowerCase();
+    if (language !== expected) return null;
+    if (options.blueprintId && String(product.blueprint_id) !== String(options.blueprintId)) return null;
+    if (product.graded || product.on_vacation || properties.signed || properties.altered) return null;
+    if (product.quantity <= 0 || (product.bundle_size && product.bundle_size !== 1)) return null;
+  }
 
   if (!Number.isFinite(cents) || cents <= 0) return null;
   if (currency !== "EUR" || condition !== "Near Mint") return null;
@@ -38,8 +47,8 @@ function median(values) {
   return Math.round((values[middle - 1] + values[middle]) / 2);
 }
 
-function calculateMarketPrice(products, capturedAt = new Date()) {
-  const offers = flattenProducts(products).map(getOffer).filter(Boolean);
+function calculateMarketPrice(products, capturedAt = new Date(), options = {}) {
+  const offers = flattenProducts(products).map((product) => getOffer(product, options)).filter(Boolean);
   const frenchOffers = offers.filter(({ country }) => country === "FR");
   const scope = frenchOffers.length >= MIN_FR_OFFERS ? "FR" : "EU";
   const scopedOffers = scope === "FR" ? frenchOffers : offers;
@@ -125,4 +134,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { calculateMarketPrice, fetchBlueprintPrice };
+module.exports = { calculateMarketPrice, fetchBlueprintPrice, flattenProducts };

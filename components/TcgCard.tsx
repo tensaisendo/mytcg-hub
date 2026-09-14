@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, PointerEvent } from "react";
 import Link from "next/link";
-import { Card, getCardDisplay, getRelationLabel, getStrapiImageUrl, type CardLanguage } from "@/lib/strapi";
+import { Card, getCardDisplay, getRelationLabel, getTreatmentLabel, getStrapiImageUrl, type CardLanguage } from "@/lib/strapi";
 
 const colorValues: Record<string, string> = {
   Red: "#dc3848",
@@ -55,7 +55,7 @@ export default function TcgCard({
   const thumbnailImageUrl = getStrapiImageUrl(display.image, "small");
   const originalImageUrl = getStrapiImageUrl(display.image);
   const rarity = card.rarity?.name || "N/A";
-  const badge = [getRelationLabel(card.rarity, language) || rarityLabels[rarity] || rarity, getRelationLabel(card.treatment, language)].filter(Boolean).join(" · ");
+  const badge = getTreatmentLabel(display.treatment) || getRelationLabel(card.rarity, language) || rarityLabels[rarity] || rarity;
   const accent = colorValues[card.colors?.[0]?.name] || "#8b929e";
   const [loaded, setLoaded] = useState(false);
   const [imageAttempt, setImageAttempt] = useState(0);
@@ -100,7 +100,7 @@ export default function TcgCard({
             ref={imageRef}
             className="tcg-card__image"
             src={imageAttempt === 0 ? thumbnailImageUrl : imageAttempt === 1 ? `${thumbnailImageUrl}?retry=1` : `${originalImageUrl}?retry=1`}
-            alt={display.image?.alternativeText || `${display.name} ${card.cardId}`}
+            alt={display.image?.alternativeText || `${display.name} ${display.cardId}`}
             loading={priority ? "eager" : "lazy"}
             decoding="async"
             fetchPriority={priority ? "high" : "auto"}
@@ -114,7 +114,7 @@ export default function TcgCard({
             }}
           />
         ) : (
-          <div className="tcg-card__missing">{card.displayCode}</div>
+          <div className="tcg-card__missing">{display.displayCode}</div>
         )}
         <div className="tcg-card__shade" />
         <div className="tcg-card__shine" />
@@ -125,7 +125,7 @@ export default function TcgCard({
       </Link>
       <div className="tcg-card__meta">
         <div>
-          <p className="tcg-card__code">{card.cardId.replace("_", " · ")}</p>
+          <p className="tcg-card__code">{display.cardId.replace("_", " · ")}</p>
           <h2><Link href={`/cards/${display.printing?.slug || card.slug}?lang=${language}`}>{display.name}</Link></h2>
         </div>
         <div className="tcg-card__stats" aria-label="Card statistics">

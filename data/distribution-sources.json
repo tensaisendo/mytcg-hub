@@ -1,0 +1,23 @@
+{
+  "FR": {
+    "market": "France",
+    "indexes": [
+      "https://fr.onepiece-cardgame.com/news/?category=events",
+      "https://fr.onepiece-cardgame.com/events/"
+    ]
+  },
+  "EN": {
+    "market": "NA/EU/OC/LATAM/ME",
+    "indexes": [
+      "https://en.onepiece-cardgame.com/news/?category=events",
+      "https://en.onepiece-cardgame.com/events/"
+    ]
+  },
+  "JP": {
+    "market": "Japan",
+    "indexes": [
+      "https://www.onepiece-cardgame.com/news/?category=events",
+      "https://www.onepiece-cardgame.com/events/"
+    ]
+  }
+}

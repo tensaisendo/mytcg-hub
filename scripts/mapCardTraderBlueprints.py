@@ -85,7 +85,7 @@ def text_score(card, candidate):
         if is_special:
             score += 15
 
-    if treatment == "Manga Rare":
+    if treatment in ("Manga Rare", "Red Manga"):
         score += 100 if "manga" in version or suffix == "m" else -30
     elif treatment == "Alternative Art":
         if any(term in version for term in ("alternate", "parallel", "gold", "signed")):

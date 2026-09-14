@@ -267,6 +267,9 @@ complet dans le site One Piece.
 
 L’intégration existante se trouve dans `mytcg-hub` et peut servir de base,
 sans être encore une intégration Pokémon ni une fonctionnalité d’estimation.
+Le site est actuellement une application Next.js 16/React 19 reliée à un CMS
+Strapi ; les traitements CardTrader sont des scripts de maintenance côté
+serveur, et non du code exécuté dans le navigateur.
 
 * `scripts/fetchCardTraderBlueprints.py` récupère les extensions One Piece et
   leurs blueprints depuis l’API CardTrader, puis les conserve dans
@@ -276,28 +279,55 @@ sans être encore une intégration Pokémon ni une fonctionnalité d’estimatio
   Il produit `data/cardtrader-mapping.json` et
   `data/cardtrader-mapping-report.json`.
 * `scripts/cardTraderPricing.js` contient le calcul commun de prix : filtrage
-  EUR, Near Mint et vendeurs européens, préférence aux offres françaises,
-  puis médiane des premières offres comparables. Il expose aussi un self-test.
-* `scripts/syncCardTraderPrices.py` synchronise les blueprints et les prix dans
-  la base Strapi locale. Il sait réutiliser le cache, limiter les appels,
-  actualiser les prix et ne traiter que les prix manquants.
-* `.cache/cardtrader/prices.json` conserve les réponses de prix normalisées et
-  les échecs de récupération. Le dossier `.cache/` est ignoré par Git.
-* Les champs déjà prévus côté CMS pour la provenance sont `price`,
-  `priceCurrency`, `priceSource`, `priceUpdatedAt`, `priceSampleSize`,
-  `priceScope`, `priceMethod` et `cardTraderBlueprintId`.
+  EUR, Near Mint et vendeurs européens, exclusion des annonces non
+  comparables (par exemple produit gradé, vendeur absent ou lot), préférence
+  aux offres françaises lorsqu’elles sont assez nombreuses, puis médiane des
+  dix offres comparables les moins chères. Il expose aussi un self-test.
+* `scripts/syncCardTraderPrices.py` est le synchroniseur historique EN vers la
+  base Strapi locale. Il sait reprendre un cache, temporiser les appels,
+  actualiser les prix et limiter le traitement aux prix manquants.
+* `scripts/syncCardTraderPrintingPrice.js` traite explicitement une impression
+  FR ou JP après contrôle du blueprint, de l’extension et de l’absence
+  d’ambiguïté ; il fonctionne en simulation par défaut avant toute écriture.
+* `scripts/syncCardTraderLocalizedPrices.js` traite en lot les impressions FR
+  et JP, conserve les prix existants, écarte les variantes ambiguës, limite les
+  appels et produit `data/cardtrader-localized-report.json`.
+* `scripts/cardTraderLanguages.test.cjs` couvre les règles de langue et de
+  filtrage du calcul partagé.
+
+Les données versionnées disponibles sont les associations carte/blueprint et
+leurs rapports (`data/cardtrader-mapping*.json`), ainsi que le rapport de la
+dernière synchronisation localisée. Les réponses brutes ou temporaires sont
+conservées sous `.cache/cardtrader/` : blueprints, images de rapprochement,
+prix EN, expansions, blueprints et prix localisés, ainsi que sauvegardes avant
+écriture. Ce dossier est ignoré par Git et ne constitue pas une source de
+données durable.
+
+Les champs déjà prévus dans le type Strapi `card-printing` pour la provenance
+sont `price`, `priceCurrency`, `priceSource`, `priceUpdatedAt`,
+`priceSampleSize`, `priceScope`, `priceMethod`, `priceCondition`,
+`priceSourceUrl` et `cardTraderBlueprintId`. Les impressions distinguent déjà
+les langues FR, EN et JP ainsi qu’une éventuelle variante.
 
 La variable d’environnement nécessaire aux scripts est
-`CARDTRADER_API_TOKEN`, lue depuis `mytcg-hub/.env.local`. Sa valeur ne doit
-jamais être commitée, affichée dans la documentation ou envoyée au navigateur.
-Le frontend utilise uniquement les variables publiques nécessaires à Strapi.
+`CARDTRADER_API_TOKEN`. Les scripts Python la lisent dans
+`mytcg-hub/.env.local` ; les scripts Node la lisent dans l’environnement du
+processus. Les synchronisations vers Strapi utilisent également
+`STRAPI_API_TOKEN` (ou le mécanisme de jeton de maintenance existant) et
+`NEXT_PUBLIC_STRAPI_URL` pour localiser le CMS. Seuls les noms de variables et
+des valeurs factices figurent dans `.env.example` : aucune valeur réelle ne
+doit être commitée, documentée, journalisée ou envoyée au navigateur.
 
 Les éléments directement réutilisables pour l’estimateur sont le cache, le
-client API côté serveur, le filtrage et l’agrégation de prix, la provenance,
-la date de collecte, les limites d’appels et le principe de mapping par
-blueprint. Il faudra toutefois généraliser le modèle pour les produits
-Pokémon, les produits scellés, les langues et les états, et distinguer les
-offres actives des ventes réalisées.
+client API côté serveur, les reprises et simulations des synchronisations, le
+filtrage et l’agrégation de prix, la provenance, la date de collecte, les
+limites d’appels et le principe de mapping par blueprint. Il faudra toutefois
+généraliser le modèle, actuellement centré sur les cartes One Piece non
+gradées en état Near Mint et les langues EN/FR/JP, pour Pokémon, les produits
+scellés, les autres langues, régions, variantes et états. Il faudra aussi
+distinguer explicitement les offres actives des ventes réalisées ; les caches
+et rapports existants ne remplacent pas un historique de prix conçu pour
+l’estimateur.
 
 ## Critères d’acceptation de la future V1
 
